@@ -14,7 +14,7 @@ License: https://creativecommons.org/publicdomain/zero/1.0/
 
 ## Original music and fictional radio
 
-- `radio-jazz.wav`: original 32-bar, 68 BPM jazz-style instrumental created for Hollow; synthesized electric piano, bass and brushed percussion. Generator: `scripts/make_radio_bed.py`. No sampled commercial songs or broadcast audio.
+- `radio-jazz.wav`: an obsolete original 32-bar, 68 BPM jazz-style instrumental from the prototype. It is not part of the current release, and no sampled commercial songs or broadcast audio are used.
 - DJ scripts: four original Japanese passages in `RadioVoiceBuilder.scripts`. A fictional station named Hollow Midnight Radio. No real news, live weather, cloned speakers or commercial radio program.
 - DJ audio: rendered locally into memory using an available Japanese macOS system voice. Prefer enhanced/premium voices if already installed, otherwise Kyoko. No personal voice permission, network download, or user audio recording is used by Hollow. Voice quality depends on the installed voice; this is synthesized narration, not a human-recorded ASMR performance.
 - `previews/*.wav`: offline examples rendered from Hollow's generated/owned or CC0 scene layers only. They do not contain captured system audio. These previews are not packaged into the application.
@@ -23,7 +23,7 @@ For a release-quality edition, audition lossless masters, replace the prototype 
 
 ## 0.3 update — reference-inspired office and lakeside
 
-The former `radio-jazz.wav` is **not loaded, played, or bundled** in 0.3. Its source WAV remains only in `legacy-assets/radio-jazz-v02.wav` for development history. The radio and office signal paths never read a music bank. Historical 0.2 descriptions above refer to the previous version.
+The former `radio-jazz.wav` is **not loaded, played, or bundled** in the current release. The radio and office signal paths never read a music bank. Historical 0.2 descriptions above refer to the previous version; obsolete source assets have been removed from the working tree.
 
 Additional CC0 pages were checked directly on 2026-09-13; exact HQ preview URLs are recorded in `Resources/scene-sources.json`:
 

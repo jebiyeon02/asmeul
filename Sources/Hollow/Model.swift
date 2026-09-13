@@ -16,6 +16,31 @@ struct SavedMood: Codable {
   var music: Double? = nil
   var tracks: [TrackSetting]? = nil
   var spatial: Bool? = nil
+  var theme: AmbientTheme? = nil
+}
+
+enum AmbientTheme: String, Codable, CaseIterable, Identifiable {
+  case deepSea
+  case aurora
+  case spectral
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .deepSea: return "심해의 휴식"
+    case .aurora: return "오로라"
+    case .spectral: return "스펙트럴"
+    }
+  }
+
+  var subtitle: String {
+    switch self {
+    case .deepSea: return "딥 네이비 · 시안"
+    case .aurora: return "인디고 · 민트"
+    case .spectral: return "플럼 · 웜 골드"
+    }
+  }
 }
 
 func property<T: FixedWidthInteger>(
@@ -54,6 +79,11 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   @Published var gain = 0.7 { didSet { configure() } }
   @Published var ambience = 0.65 { didSet { configure() } }
   @Published var music = 1.0 { didSet { configure() } }
+  @Published var theme: AmbientTheme = .deepSea { didSet { rememberMood() } }
+  @Published var animationsEnabled: Bool =
+    UserDefaults.standard.object(forKey: "animations.enabled") as? Bool ?? true {
+    didSet { UserDefaults.standard.set(animationsEnabled, forKey: "animations.enabled") }
+  }
   @Published var catalog = ASMRTrack.builtIn
   @Published var tracks = ASMRTrack.builtIn.map { TrackSetting(id: $0.id) } {
     didSet { configure() }
@@ -79,11 +109,14 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   private var memories: [String: SavedMood] = [:]
   var selectedTrackCount: Int { tracks.filter(\.enabled).count }
   var memoryKey: String { processes.first(where: { $0.id == selected })?.bundleID ?? "system" }
+  var activeTrackIDs: Set<Int> { Set(tracks.filter(\.enabled).map(\.id)) }
+  var rainActive: Bool { tracks.contains { ($0.id == 0 || $0.id == 1) && $0.enabled } }
+  var fireActive: Bool { tracks.contains { ($0.id == 18 || $0.id == 19) && $0.enabled } }
 
   var savedMood: SavedMood {
     SavedMood(
       space: space, warmth: warmth, orbit: orbit, gain: gain, ambience: ambience, music: music,
-      tracks: tracks, spatial: spatial)
+      tracks: tracks, spatial: spatial, theme: theme)
   }
   func toggleTrack(_ id: Int) {
     guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
@@ -187,10 +220,12 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       gain = 0.7
       ambience = 0.65
       music = 1
+      theme = .deepSea
       tracks = catalog.map { TrackSetting(id: $0.id) }
       return
     }
     spatial = value.spatial ?? true
+    theme = value.theme ?? .deepSea
     ambience = min(1, max(0, value.ambience ?? 0.65))
     music = min(1, max(0, value.music ?? 1))
     tracks = catalog.map { item in
@@ -414,6 +449,37 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     } catch let importError {
       self.error = "MP3를 추가하지 못했습니다: \(importError.localizedDescription)"
     }
+  }
+  func removeCustomSound(_ id: Int) {
+    guard let index = catalog.firstIndex(where: { $0.id == id && $0.custom }) else { return }
+    let item = catalog[index]
+    let fileURL = customSoundsDirectory.appendingPathComponent(item.file)
+    do {
+      if FileManager.default.fileExists(atPath: fileURL.path) {
+        try FileManager.default.removeItem(at: fileURL)
+      }
+    } catch {
+      self.error = "\(item.name)을 삭제하지 못했습니다: \(error.localizedDescription)"
+      return
+    }
+
+    // Stop the slot immediately before removing its UI and persisted catalog entry.
+    hollow_track_gain(engine, Int32(id), 0)
+    catalog.remove(at: index)
+    tracks.removeAll { $0.id == id }
+    durations.removeValue(forKey: id)
+
+    do {
+      try FileManager.default.createDirectory(
+        at: customSoundsDirectory, withIntermediateDirectories: true)
+      let custom = catalog.filter(\.custom)
+      try JSONEncoder().encode(custom).write(to: customCatalogURL, options: .atomic)
+      status = "\(item.name)을 삭제했습니다."
+      error = nil
+    } catch {
+      self.error = "음원 목록을 저장하지 못했습니다: \(error.localizedDescription)"
+    }
+    rememberMood()
   }
   func shutdown() {
     stop()

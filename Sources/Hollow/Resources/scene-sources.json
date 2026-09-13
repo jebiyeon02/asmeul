@@ -1,0 +1,50 @@
+[
+  {
+    "name": "crickets",
+    "source": "https://freesound.org/s/195707/",
+    "title": "Freesound - Evening_crickets.wav by adneonlux",
+    "preview": "https://cdn.freesound.org/previews/195/195707_2980277-hq.mp3",
+    "bytes": 2449284,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "lake",
+    "source": "https://freesound.org/s/614299/",
+    "title": "Freesound - Gentle waves on a lake by TheFlyFishingFilmmaker",
+    "preview": "https://cdn.freesound.org/previews/614/614299_6501596-hq.mp3",
+    "bytes": 4730871,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "writing",
+    "source": "https://freesound.org/s/444479/",
+    "title": "Freesound - Writing with Pencil on Paper by parkersenk",
+    "preview": "https://cdn.freesound.org/previews/444/444479_9039079-hq.mp3",
+    "bytes": 583296,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "keyboard",
+    "source": "https://freesound.org/s/489424/",
+    "title": "Freesound - Typing on a keyboard by SamsterBirdies",
+    "preview": "https://cdn.freesound.org/previews/489/489424_5487341-hq.mp3",
+    "bytes": 2350753,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "grass",
+    "source": "https://freesound.org/s/135870/",
+    "title": "Freesound - GRASS IN THE WIND.wav by ciccarelli",
+    "preview": "https://cdn.freesound.org/previews/135/135870_1672196-hq.mp3",
+    "bytes": 495120,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "city",
+    "source": "https://freesound.org/s/572530/",
+    "title": "Freesound - 180912 Night city rumble quiet distant traffic roof urban residential TORONTO.flac by TRP",
+    "preview": "https://cdn.freesound.org/previews/572/572530_97550-hq.mp3",
+    "bytes": 4619136,
+    "license": "CC0 1.0"
+  }
+]

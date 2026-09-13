@@ -1,0 +1,23 @@
+[
+  {
+    "name": "cave",
+    "source": "https://freesound.org/people/mentos987/sounds/818888/",
+    "preview": "https://cdn.freesound.org/previews/818/818888_15684938-hq.mp3",
+    "bytes": 676656,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "cave-echo",
+    "source": "https://freesound.org/people/Sclolex/sounds/177958/",
+    "preview": "https://cdn.freesound.org/previews/177/177958_985466-hq.mp3",
+    "bytes": 2078208,
+    "license": "CC0 1.0"
+  },
+  {
+    "name": "rain",
+    "source": "https://freesound.org/people/KaleidacousticsAudio/sounds/630424/",
+    "preview": "https://cdn.freesound.org/previews/630/630424_13875907-hq.mp3",
+    "bytes": 1789104,
+    "license": "CC0 1.0"
+  }
+]

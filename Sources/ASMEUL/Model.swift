@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 private let sourceLogger = Logger(
-  subsystem: "studio.hollow.prototype", category: "AudioSource")
+  subsystem: Bundle.main.bundleIdentifier ?? "studio.asmeul", category: "AudioSource")
 
 struct EnvironmentPhoto: Identifiable, Hashable, Codable {
   let id: String
@@ -127,7 +127,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   @Published var status = "헤드폰을 쓰고, 좋아하는 음악을 재생하세요."
   @Published var error: String?
   private var rate: Double = 0
-  private let engine = hollow_create()!
+  private let engine = asmeul_create()!
   private var monitorTimer: Timer?
   private var lastCallbacks: UInt64 = 0
   private var stalled = 0
@@ -189,6 +189,9 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     rememberMood()
   }
   init() {
+    migrateLegacyData()
+    animationsEnabled =
+      UserDefaults.standard.object(forKey: "animations.enabled") as? Bool ?? true
     loadCustomCatalog()
     if let data =
       (UserDefaults.standard.data(forKey: "mixes.v4") ?? UserDefaults.standard.data(forKey: "moods")),
@@ -253,21 +256,21 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   func configure() {
     guard !restoringMood else { return }
     let fade = 1.0
-    hollow_configure(
+    asmeul_configure(
       engine, Float(space * fade), Float(warmth * fade), Float(orbit * fade),
       Float(gain), bypass ? 1 : 0)
-    hollow_spatial(engine, spatial ? 1 : 0)
-    hollow_mix(engine, Float(ambience), Float(music), Float(fade))
+    asmeul_spatial(engine, spatial ? 1 : 0)
+    asmeul_mix(engine, Float(ambience), Float(music), Float(fade))
   }
 
   private func configureTracks(previous: [TrackSetting] = []) {
     guard !restoringMood else { return }
     let old = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
     for track in tracks where old[track.id] != track {
-      hollow_position(
+      asmeul_position(
         engine, Int32(track.id), Int32(track.direction ?? defaultDirection(track.id)),
         Float(track.distance ?? 0.3))
-      hollow_track_gain(engine, Int32(track.id), track.enabled ? Float(track.volume) : 0)
+      asmeul_track_gain(engine, Int32(track.id), track.enabled ? Float(track.volume) : 0)
       if track.enabled { requestSound(track.id) }
       else { releaseSoundLater(track.id) }
     }
@@ -323,7 +326,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     let work = DispatchWorkItem { [weak self] in
       guard let self, !self.shuttingDown,
         !self.tracks.contains(where: { $0.id == id && $0.enabled }) else { return }
-      hollow_unload_sound(self.engine, Int32(id))
+      asmeul_unload_sound(self.engine, Int32(id))
       self.loadedTracks.remove(id)
       self.evictionTasks.removeValue(forKey: id)
     }
@@ -478,8 +481,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     let idText = processIDs.map { String($0) }.joined(separator: ",")
     sourceLogger.info(
       "starting selectedPid=\(self.selected, privacy: .public) coreAudioObjectIDs=[\(idText, privacy: .public)]")
-    let result = selected == 0 ? hollow_start(engine, 0) : processIDs.withUnsafeBufferPointer {
-      hollow_start_processes(engine, $0.baseAddress, UInt32($0.count))
+    let result = selected == 0 ? asmeul_start(engine, 0) : processIDs.withUnsafeBufferPointer {
+      asmeul_start_processes(engine, $0.baseAddress, UInt32($0.count))
     }
     if result == 0 {
       capturedProcessIDs = processIDs
@@ -487,7 +490,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       waitingForMusic = false
       running = true
       startMonitor()
-      rate = hollow_sample_rate(engine)
+      rate = asmeul_sample_rate(engine)
       status = "음악 입력을 확인하고 있어요. 원음과 ASMR을 함께 재생합니다."
       lastCallbacks = 0
       stalled = 0
@@ -495,7 +498,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     } else {
       waitingForMusic = false
       error =
-        "오디오를 시작하지 못했습니다: \(String(cString:hollow_error(engine))). 시스템 설정에서 아스믈의 시스템 오디오 녹음 권한과 출력 장치를 확인하세요."
+        "오디오를 시작하지 못했습니다: \(String(cString:asmeul_error(engine))). 시스템 설정에서 아스믈의 시스템 오디오 녹음 권한과 출력 장치를 확인하세요."
       running = false
     }
   }
@@ -531,7 +534,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     let idText = source?.processIDs.map { String($0) }.joined(separator: ",") ?? ""
     sourceLogger.info(
       "rebuilding selectedPid=\(self.selected, privacy: .public) coreAudioObjectIDs=[\(idText, privacy: .public)]")
-    hollow_stop(engine)
+    asmeul_stop(engine)
     monitorTimer?.invalidate()
     monitorTimer = nil
     running = false
@@ -545,7 +548,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   func stop(message: String = "효과를 껐습니다. 앱의 원래 소리로 재생됩니다.") {
     cancelSourceRetry()
     sourceRetryAttempt = 0
-    hollow_stop(engine)
+    asmeul_stop(engine)
     monitorTimer?.invalidate()
     monitorTimer = nil
     running = false
@@ -571,15 +574,15 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       mSelector: kAudioDevicePropertyNominalSampleRate, mScope: kAudioObjectPropertyScopeGlobal,
       mElement: kAudioObjectPropertyElementMain)
     guard
-      AudioObjectGetPropertyData(hollow_output_device(engine), &address, 0, nil, &size, &value)
+      AudioObjectGetPropertyData(asmeul_output_device(engine), &address, 0, nil, &size, &value)
         == noErr
     else { return nil }
     return value
   }
   private func pollMusicInput() -> Bool {
-    let captureState = hollow_poll_capture(engine)
+    let captureState = asmeul_poll_capture(engine)
     if captureState < 0 {
-      let detail = String(cString: hollow_error(engine))
+      let detail = String(cString: asmeul_error(engine))
       stop(message: "음악 입력을 연결하지 못해 원음으로 복구했습니다.")
       error = "오디오 연결 실패: \(detail)"
       return false
@@ -600,9 +603,9 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   func tick() {
     guard !shuttingDown, running else { return }
     guard pollMusicInput() else { return }
-    hollow_collect_sounds(engine)
-    meter.update(peak: hollow_peak(engine))
-    let callbacks = hollow_callbacks(engine)
+    asmeul_collect_sounds(engine)
+    meter.update(peak: asmeul_peak(engine))
+    let callbacks = asmeul_callbacks(engine)
     if callbacks == lastCallbacks { stalled += 1 } else { stalled = 0 }
     lastCallbacks = callbacks
     if stalled > 40 {
@@ -612,7 +615,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     }
     if let output: UInt32 = property(
       AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice,
-      initial: UInt32(0)), output != hollow_output_device(engine)
+      initial: UInt32(0)), output != asmeul_output_device(engine)
     {
       stop(message: "출력 장치가 바뀌어 원음으로 복구했습니다. 새 장치에서 다시 시작하세요.")
       updateOutput()
@@ -713,9 +716,40 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   }
   var customSoundsDirectory: URL {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return base.appendingPathComponent("Hollow/User Sounds", isDirectory: true)
+    return base.appendingPathComponent("ASMEUL/User Sounds", isDirectory: true)
+  }
+  private var legacyCustomSoundsDirectory: URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let previousAppName = ["Hol", "low"].joined()
+    return base.appendingPathComponent("\(previousAppName)/User Sounds", isDirectory: true)
   }
   private var customCatalogURL: URL { customSoundsDirectory.appendingPathComponent("catalog.json") }
+  private func migrateLegacyData() {
+    let defaults = UserDefaults.standard
+    let previousDomain = ["studio", ["hol", "low"].joined(), "prototype"]
+      .joined(separator: ".")
+    if let previousDefaults = UserDefaults(suiteName: previousDomain) {
+      for key in ["animations.enabled", "mixes.v4", "moods"]
+      where defaults.object(forKey: key) == nil {
+        if let value = previousDefaults.object(forKey: key) {
+          defaults.set(value, forKey: key)
+        }
+      }
+    }
+
+    let fileManager = FileManager.default
+    guard !fileManager.fileExists(atPath: customSoundsDirectory.path),
+      fileManager.fileExists(atPath: legacyCustomSoundsDirectory.path)
+    else { return }
+    do {
+      try fileManager.createDirectory(
+        at: customSoundsDirectory.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try fileManager.moveItem(at: legacyCustomSoundsDirectory, to: customSoundsDirectory)
+    } catch {
+      sourceLogger.notice(
+        "legacy user sounds migration skipped: \(error.localizedDescription, privacy: .public)")
+    }
+  }
   func loadCustomCatalog() {
     guard let data = try? Data(contentsOf: customCatalogURL),
       let saved = try? JSONDecoder().decode([ASMRTrack].self, from: data)
@@ -814,8 +848,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     loadingTracks.remove(id)
     evictionTasks.removeValue(forKey: id)?.cancel()
     loadedTracks.remove(id)
-    hollow_track_gain(engine, Int32(id), 0)
-    hollow_unload_sound(engine, Int32(id))
+    asmeul_track_gain(engine, Int32(id), 0)
+    asmeul_unload_sound(engine, Int32(id))
     catalog.remove(at: index)
     tracks.removeAll { $0.id == id }
     durations.removeValue(forKey: id)
@@ -852,6 +886,6 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     if let hotKey { UnregisterEventHotKey(hotKey) }
     if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-    hollow_destroy(engine)
+    asmeul_destroy(engine)
   }
 }

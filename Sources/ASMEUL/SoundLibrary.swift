@@ -56,7 +56,7 @@ enum AppResources {
   static let bundle: Bundle = {
     if let resourceURL = Bundle.main.resourceURL,
       let installedBundle = Bundle(
-        url: resourceURL.appendingPathComponent("Hollow_Hollow.bundle", isDirectory: true))
+        url: resourceURL.appendingPathComponent("ASMEUL_ASMEUL.bundle", isDirectory: true))
     {
       return installedBundle
     }
@@ -86,7 +86,7 @@ enum SoundLibrary {
     return seconds
   }
 
-  static func loadResources(into engine: HollowEngine) throws -> [Int: Double] {
+  static func loadResources(into engine: ASMEULEngine) throws -> [Int: Double] {
     var durations: [Int: Double] = [:]
     for track in ASMRTrack.builtIn {
       guard let url = AppResources.url(forResource: track.file) else {
@@ -97,16 +97,16 @@ enum SoundLibrary {
     return durations
   }
 
-  static func load(url: URL, slot: Int, into engine: HollowEngine) throws -> Double {
+  static func load(url: URL, slot: Int, into engine: ASMEULEngine) throws -> Double {
     try Task.checkCancellation()
     var finished = false
-    defer { if !finished { hollow_unload_sound(engine, Int32(slot)) } }
+    defer { if !finished { asmeul_unload_sound(engine, Int32(slot)) } }
     let file = try AVAudioFile(forReading: url)
     let format = file.processingFormat
     guard file.length >= 4, file.length <= AVAudioFramePosition(format.sampleRate * 3600),
       file.length <= UInt32.max,
       (0..<36).contains(slot),
-      hollow_begin_sound(engine, Int32(slot), UInt32(file.length), format.sampleRate) == 1,
+      asmeul_begin_sound(engine, Int32(slot), UInt32(file.length), format.sampleRate) == 1,
       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65536)
     else { throw CocoaError(.fileReadCorruptFile) }
     var loaded: UInt64 = 0
@@ -126,12 +126,12 @@ enum SoundLibrary {
         stereo[i * 2 + 1] = channels[right][i]
       }
       let result = stereo.withUnsafeBufferPointer {
-        hollow_append_sound(engine, Int32(slot), $0.baseAddress, UInt32(count))
+        asmeul_append_sound(engine, Int32(slot), $0.baseAddress, UInt32(count))
       }
       guard result == 1 else { throw CocoaError(.fileReadCorruptFile) }
       loaded += UInt64(count)
     }
-    guard hollow_finish_sound(engine, Int32(slot)) == 1 else {
+    guard asmeul_finish_sound(engine, Int32(slot)) == 1 else {
       throw CocoaError(.fileReadCorruptFile)
     }
     finished = true
@@ -142,23 +142,23 @@ enum SoundLibrary {
 /// The private decoder is never rendered. Once awaited, only the main actor
 /// transfers its immutable PCM into the live engine, then destroys the decoder.
 final class PreparedSound: @unchecked Sendable {
-  private let decoder: HollowEngine
+  private let decoder: ASMEULEngine
   let duration: Double
   let slot: Int
 
   init(url: URL, slot: Int) throws {
-    let engine = hollow_create()!
+    let engine = asmeul_create()!
     do { duration = try SoundLibrary.load(url: url, slot: slot, into: engine) }
-    catch { hollow_destroy(engine); throw error }
+    catch { asmeul_destroy(engine); throw error }
     decoder = engine
     self.slot = slot
   }
 
-  func install(into engine: HollowEngine) -> Bool {
-    hollow_take_sound(engine, decoder, Int32(slot)) == 1
+  func install(into engine: ASMEULEngine) -> Bool {
+    asmeul_take_sound(engine, decoder, Int32(slot)) == 1
   }
 
-  deinit { hollow_destroy(decoder) }
+  deinit { asmeul_destroy(decoder) }
 }
 
 /// Serializes long decodes so selecting many tracks cannot flood the machine

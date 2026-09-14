@@ -8,7 +8,7 @@
 
 // Eight-line orthogonal feedback network. Storage is prepared off the audio thread.
 // This is algorithmic reverb and stereo orbit, not convolution or HRTF.
-class HollowDSP {
+class ASMEULDSP {
     struct Delay { std::vector<float> data; size_t cursor=0; float low=0; };
     std::array<Delay,8> delays;
     double rate=48000, phase=0;

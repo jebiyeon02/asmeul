@@ -1,8 +1,8 @@
-# Hollow soundscape sources
+# ASMEUL soundscape sources
 
 ## Bundled field recordings
 
-All three source pages were checked on 2026-09-13 and identify the audio as **CC0 1.0**. The prototype bundles the publicly served high-quality MP3 preview, not the downloadable original lossless WAV. Conversion to float PCM cannot restore compression losses. `Sources/Hollow/Resources/sources.json` records the exact download URLs.
+All three source pages were checked on 2026-09-13 and identify the audio as **CC0 1.0**. The prototype bundles the publicly served high-quality MP3 preview, not the downloadable original lossless WAV. Conversion to float PCM cannot restore compression losses. `Sources/ASMEUL/Resources/sources.json` records the exact download URLs.
 
 | File | Work / creator | Source | Processing |
 |---|---|---|---|
@@ -25,9 +25,9 @@ The following bundled files were provided by the user. No license or ownership c
 ## Original music and fictional radio
 
 - `radio-jazz.wav`: an obsolete original 32-bar, 68 BPM jazz-style instrumental from the prototype. It is not part of the current release, and no sampled commercial songs or broadcast audio are used.
-- DJ scripts: four original Japanese passages in `RadioVoiceBuilder.scripts`. A fictional station named Hollow Midnight Radio. No real news, live weather, cloned speakers or commercial radio program.
-- DJ audio: rendered locally into memory using an available Japanese macOS system voice. Prefer enhanced/premium voices if already installed, otherwise Kyoko. No personal voice permission, network download, or user audio recording is used by Hollow. Voice quality depends on the installed voice; this is synthesized narration, not a human-recorded ASMR performance.
-- `previews/*.wav`: offline examples rendered from Hollow's generated/owned or CC0 scene layers only. They do not contain captured system audio. These previews are not packaged into the application.
+- DJ scripts: four original Japanese passages in `RadioVoiceBuilder.scripts`. A fictional station named ASMEUL Midnight Radio. No real news, live weather, cloned speakers or commercial radio program.
+- DJ audio: rendered locally into memory using an available Japanese macOS system voice. Prefer enhanced/premium voices if already installed, otherwise Kyoko. No personal voice permission, network download, or user audio recording is used by ASMEUL. Voice quality depends on the installed voice; this is synthesized narration, not a human-recorded ASMR performance.
+- `previews/*.wav`: offline examples rendered from ASMEUL's generated/owned or CC0 scene layers only. They do not contain captured system audio. These previews are not packaged into the application.
 
 For a release-quality edition, audition lossless masters, replace the prototype narration with a commissioned Japanese DJ performance, and review voice/music distribution rights for the chosen release assets. No claim is made that the current synthesis sounds indistinguishable from a human performance.
 

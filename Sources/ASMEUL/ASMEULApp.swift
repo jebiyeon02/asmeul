@@ -1,6 +1,9 @@
 import AppKit
 import SwiftUI
 
+private let asmeulVersion =
+  Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "DEV"
+
 @main struct ASMEULApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
   var body: some Scene {
@@ -411,7 +414,7 @@ struct Sidebar: View {
       }
       Label(model.outputName, systemImage: "headphones")
         .font(.system(size: 9)).foregroundStyle(muted).lineLimit(1).padding(.top, 12)
-      Text("ASMEUL 0.9").font(.system(size: 7, weight: .medium)).tracking(1.5)
+      Text("ASMEUL \(asmeulVersion)").font(.system(size: 7, weight: .medium)).tracking(1.5)
         .foregroundStyle(Color.white.opacity(0.25)).padding(.top, 17).padding(.bottom, 4)
     }.padding(.horizontal, 22).frame(width: 218).glass(cornerRadius: 16)
   }

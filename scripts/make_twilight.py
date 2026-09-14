@@ -3,7 +3,7 @@ from pathlib import Path
 import wave
 import numpy as np
 rng=np.random.default_rng(42179);sr=48000;n=sr*96
-piano=np.zeros((n,2));details=np.zeros((n,2));root=Path(__file__).resolve().parents[1]/'Sources/Hollow/Resources'
+piano=np.zeros((n,2));details=np.zeros((n,2));root=Path(__file__).resolve().parents[1]/'Sources/ASMEUL/Resources'
 def add(track,signal,at,pan):
  i=(np.arange(len(signal))+int(at*sr))%n
  track[i,0]+=signal*np.sqrt((1-pan)/2);track[i,1]+=signal*np.sqrt((1+pan)/2)

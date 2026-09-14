@@ -19,7 +19,7 @@ struct Engine {
     AudioRing inputRing;
     std::atomic<bool> inputSignal{false},routingInput{false};
     CATapDescription *tapDescription=nil;
-    HollowDSP dsp; std::atomic<uint64_t> callbacks{0}; double sampleRate=0; std::string error;
+    ASMEULDSP dsp; std::atomic<uint64_t> callbacks{0}; double sampleRate=0; std::string error;
     void stop(){
         if(captureDevice && captureProc){AudioDeviceStop(captureDevice,captureProc);AudioDeviceDestroyIOProcID(captureDevice,captureProc);captureProc=nullptr;}
         if(device && proc){AudioDeviceStop(device,proc);AudioDeviceDestroyIOProcID(device,proc);proc=nullptr;}
@@ -103,10 +103,10 @@ static bool validateStreams(Engine &e,AudioObjectID device,AudioObjectPropertySc
     if(channels<2){e.error="A stereo output device is required.";return false;}return true;
 }
 extern "C" {
-HollowEngine hollow_create(){return new Engine;}
-void hollow_destroy(HollowEngine e){delete static_cast<Engine*>(e);}
-void hollow_stop(HollowEngine e){static_cast<Engine*>(e)->stop();}
-static int32_t startCapture(HollowEngine raw,const uint32_t *processes,uint32_t count,bool system) {
+ASMEULEngine asmeul_create(){return new Engine;}
+void asmeul_destroy(ASMEULEngine e){delete static_cast<Engine*>(e);}
+void asmeul_stop(ASMEULEngine e){static_cast<Engine*>(e)->stop();}
+static int32_t startCapture(ASMEULEngine raw,const uint32_t *processes,uint32_t count,bool system) {
     auto &e=*static_cast<Engine*>(raw);e.stop();e.error.clear();
     auto fail=[&](){e.stop();return int32_t(-1);};
     if(!e.check(read(kAudioObjectSystemObject,kAudioHardwarePropertyDefaultOutputDevice,e.output),"Default output")||!e.output)return fail();
@@ -146,9 +146,9 @@ static int32_t startCapture(HollowEngine raw,const uint32_t *processes,uint32_t 
     if(!e.check(AudioDeviceStart(e.captureDevice,e.captureProc),"Start capture"))return fail();
     if(!e.check(AudioDeviceStart(e.device,e.proc),"Start audio"))return fail();return 0;
 }
-int32_t hollow_start(HollowEngine raw,uint32_t process) {return startCapture(raw,&process,process?1:0,process==0);}
-int32_t hollow_start_processes(HollowEngine raw,const uint32_t *processes,uint32_t count) {return startCapture(raw,processes,count,false);}
-int32_t hollow_poll_capture(HollowEngine raw) {
+int32_t asmeul_start(ASMEULEngine raw,uint32_t process) {return startCapture(raw,&process,process?1:0,process==0);}
+int32_t asmeul_start_processes(ASMEULEngine raw,const uint32_t *processes,uint32_t count) {return startCapture(raw,processes,count,false);}
+int32_t asmeul_poll_capture(ASMEULEngine raw) {
     auto &e=*static_cast<Engine*>(raw);
     if(!e.tap || !e.tapDescription)return -1;
     if(e.routingInput.load(std::memory_order_acquire))return 1;
@@ -164,7 +164,7 @@ int32_t hollow_poll_capture(HollowEngine raw) {
     e.routingInput.store(true,std::memory_order_release);
     return 1;
 }
-int32_t hollow_update_processes(HollowEngine raw,const uint32_t *processes,uint32_t count) {
+int32_t asmeul_update_processes(ASMEULEngine raw,const uint32_t *processes,uint32_t count) {
     auto &e=*static_cast<Engine*>(raw);
     if(!e.tap || !e.tapDescription || e.tapDescription.exclusive)return -1;
     NSMutableArray<NSNumber*> *ids=[NSMutableArray array];
@@ -177,29 +177,29 @@ int32_t hollow_update_processes(HollowEngine raw,const uint32_t *processes,uint3
     CATapDescription *description=e.tapDescription;
     return e.check(AudioObjectSetPropertyData(e.tap,&a,0,nullptr,sizeof(description),&description),"Update app audio processes")?0:-1;
 }
-void hollow_configure(HollowEngine raw,float space,float warmth,float orbit,float gain,int bypass){auto &d=static_cast<Engine*>(raw)->dsp;d.targetSpace=space;d.targetWarmth=warmth;d.targetOrbit=orbit;d.targetGain=gain;d.bypass=bypass;}
-void hollow_render_offline(HollowEngine raw,float *output,uint32_t frames,double rate){auto &e=*static_cast<Engine*>(raw);if(e.proc||!output||rate<8000||rate>192000)return;e.dsp.prepare(rate);auto p=e.dsp.parameters();for(uint32_t i=0;i<frames;i++)e.dsp.process(0,0,output[i*2],output[i*2+1],p);}
-int hollow_load_sound(HollowEngine e,int slot,const float *stereo,uint32_t frames,double rate){auto &engine=*static_cast<Engine*>(e);auto result=engine.dsp.soundscape.load(slot,stereo,frames,rate);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();return result?1:0;}
-int hollow_begin_sound(HollowEngine e,int slot,uint32_t frames,double rate){auto &engine=*static_cast<Engine*>(e);auto result=engine.dsp.soundscape.begin(slot,frames,rate);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();return result?1:0;}
-int hollow_append_sound(HollowEngine e,int slot,const float *data,uint32_t frames){return static_cast<Engine*>(e)->dsp.soundscape.append(slot,data,frames);}
-int hollow_finish_sound(HollowEngine e,int slot){return static_cast<Engine*>(e)->dsp.soundscape.finish(slot);}
-int hollow_take_sound(HollowEngine destination,HollowEngine source,int slot){
+void asmeul_configure(ASMEULEngine raw,float space,float warmth,float orbit,float gain,int bypass){auto &d=static_cast<Engine*>(raw)->dsp;d.targetSpace=space;d.targetWarmth=warmth;d.targetOrbit=orbit;d.targetGain=gain;d.bypass=bypass;}
+void asmeul_render_offline(ASMEULEngine raw,float *output,uint32_t frames,double rate){auto &e=*static_cast<Engine*>(raw);if(e.proc||!output||rate<8000||rate>192000)return;e.dsp.prepare(rate);auto p=e.dsp.parameters();for(uint32_t i=0;i<frames;i++)e.dsp.process(0,0,output[i*2],output[i*2+1],p);}
+int asmeul_load_sound(ASMEULEngine e,int slot,const float *stereo,uint32_t frames,double rate){auto &engine=*static_cast<Engine*>(e);auto result=engine.dsp.soundscape.load(slot,stereo,frames,rate);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();return result?1:0;}
+int asmeul_begin_sound(ASMEULEngine e,int slot,uint32_t frames,double rate){auto &engine=*static_cast<Engine*>(e);auto result=engine.dsp.soundscape.begin(slot,frames,rate);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();return result?1:0;}
+int asmeul_append_sound(ASMEULEngine e,int slot,const float *data,uint32_t frames){return static_cast<Engine*>(e)->dsp.soundscape.append(slot,data,frames);}
+int asmeul_finish_sound(ASMEULEngine e,int slot){return static_cast<Engine*>(e)->dsp.soundscape.finish(slot);}
+int asmeul_take_sound(ASMEULEngine destination,ASMEULEngine source,int slot){
     auto &from=*static_cast<Engine*>(source);auto &to=*static_cast<Engine*>(destination);
     if(from.proc||from.captureProc)return 0;
     auto result=to.dsp.soundscape.takeSound(from.dsp.soundscape,slot);
     if(!to.proc)to.dsp.soundscape.reclaimRetired();return result?1:0;
 }
-void hollow_collect_sounds(HollowEngine raw){auto &e=*static_cast<Engine*>(raw);if(e.proc)e.dsp.soundscape.collectRetired();else e.dsp.soundscape.reclaimRetired();}
-uint64_t hollow_sound_bytes(HollowEngine raw){return static_cast<Engine*>(raw)->dsp.soundscape.residentSampleBytes();}
-void hollow_unload_sound(HollowEngine e,int slot){auto &engine=*static_cast<Engine*>(e);engine.dsp.soundscape.unload(slot);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();}
-void hollow_track_gain(HollowEngine e,int slot,float gain){if(slot>=0&&slot<36)static_cast<Engine*>(e)->dsp.soundscape.targetGains[slot]=std::isfinite(gain)?std::clamp(gain,0.f,1.f):0;}
-void hollow_mix(HollowEngine e,float ambience,float music,float fade){auto &s=static_cast<Engine*>(e)->dsp.soundscape;s.targetAmbient=ambience;s.targetMusic=music;s.targetFade=fade;}
-float hollow_peak(HollowEngine e){return static_cast<Engine*>(e)->dsp.peak.load();}
-uint64_t hollow_callbacks(HollowEngine e){return static_cast<Engine*>(e)->callbacks.load();}
-uint32_t hollow_output_device(HollowEngine e){return static_cast<Engine*>(e)->output;}
-double hollow_sample_rate(HollowEngine e){return static_cast<Engine*>(e)->sampleRate;}
-const char *hollow_error(HollowEngine e){return static_cast<Engine*>(e)->error.c_str();}
+void asmeul_collect_sounds(ASMEULEngine raw){auto &e=*static_cast<Engine*>(raw);if(e.proc)e.dsp.soundscape.collectRetired();else e.dsp.soundscape.reclaimRetired();}
+uint64_t asmeul_sound_bytes(ASMEULEngine raw){return static_cast<Engine*>(raw)->dsp.soundscape.residentSampleBytes();}
+void asmeul_unload_sound(ASMEULEngine e,int slot){auto &engine=*static_cast<Engine*>(e);engine.dsp.soundscape.unload(slot);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();}
+void asmeul_track_gain(ASMEULEngine e,int slot,float gain){if(slot>=0&&slot<36)static_cast<Engine*>(e)->dsp.soundscape.targetGains[slot]=std::isfinite(gain)?std::clamp(gain,0.f,1.f):0;}
+void asmeul_mix(ASMEULEngine e,float ambience,float music,float fade){auto &s=static_cast<Engine*>(e)->dsp.soundscape;s.targetAmbient=ambience;s.targetMusic=music;s.targetFade=fade;}
+float asmeul_peak(ASMEULEngine e){return static_cast<Engine*>(e)->dsp.peak.load();}
+uint64_t asmeul_callbacks(ASMEULEngine e){return static_cast<Engine*>(e)->callbacks.load();}
+uint32_t asmeul_output_device(ASMEULEngine e){return static_cast<Engine*>(e)->output;}
+double asmeul_sample_rate(ASMEULEngine e){return static_cast<Engine*>(e)->sampleRate;}
+const char *asmeul_error(ASMEULEngine e){return static_cast<Engine*>(e)->error.c_str();}
 }
 
-void hollow_spatial(HollowEngine raw,int enabled){static_cast<Engine*>(raw)->dsp.soundscape.targetSpatial=enabled!=0;}
-void hollow_position(HollowEngine raw,int slot,int direction,float distance){if(slot<0||slot>=36)return;auto &s=static_cast<Engine*>(raw)->dsp.soundscape;s.targetDirections[slot]=std::clamp(direction,0,6);s.targetDistances[slot]=std::isfinite(distance)?std::clamp(distance,0.f,1.f):0;}
+void asmeul_spatial(ASMEULEngine raw,int enabled){static_cast<Engine*>(raw)->dsp.soundscape.targetSpatial=enabled!=0;}
+void asmeul_position(ASMEULEngine raw,int slot,int direction,float distance){if(slot<0||slot>=36)return;auto &s=static_cast<Engine*>(raw)->dsp.soundscape;s.targetDirections[slot]=std::clamp(direction,0,6);s.targetDistances[slot]=std::isfinite(distance)?std::clamp(distance,0.f,1.f):0;}

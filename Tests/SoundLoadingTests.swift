@@ -8,14 +8,14 @@ extension Bundle {
 @main struct SoundLoadingTests {
   @MainActor static func main() async throws {
     let loader = SoundLoader()
-    let engine = hollow_create()!
-    defer { hollow_destroy(engine) }
+    let engine = asmeul_create()!
+    defer { asmeul_destroy(engine) }
     let urls = try Dictionary(uniqueKeysWithValues: ASMRTrack.builtIn.map {
       ($0.id, try SoundLibrary.resourceURL(for: $0))
     })
     let metadata = await loader.metadata(urls)
     assert(metadata.count == 25 && metadata[1, default: 0] > 930)
-    assert(hollow_sound_bytes(engine) == 0)
+    assert(asmeul_sound_bytes(engine) == 0)
     print("PASS: duration metadata for all 25 recordings without retaining PCM")
 
     var totalBytes: UInt64 = 0
@@ -23,21 +23,21 @@ extension Bundle {
     for track in ASMRTrack.builtIn {
       let prepared = try await loader.prepare(url: urls[track.id]!, slot: track.id)
       assert(prepared.duration > 0 && prepared.install(into: engine))
-      let bytes = hollow_sound_bytes(engine)
+      let bytes = asmeul_sound_bytes(engine)
       assert(bytes > 0)
       totalBytes += bytes
       maxBytes = max(maxBytes, bytes)
       // An already-transferred recording cannot be published twice.
       assert(!prepared.install(into: engine))
-      hollow_track_gain(engine, Int32(track.id), 0.45)
+      asmeul_track_gain(engine, Int32(track.id), 0.45)
       var output = [Float](repeating: 0, count: 4096)
       output.withUnsafeMutableBufferPointer {
-        hollow_render_offline(engine, $0.baseAddress, 2048, 48000)
+        asmeul_render_offline(engine, $0.baseAddress, 2048, 48000)
       }
       assert(output.allSatisfy { $0.isFinite && abs($0) <= 0.95001 })
-      hollow_unload_sound(engine, Int32(track.id))
-      hollow_collect_sounds(engine)
-      assert(hollow_sound_bytes(engine) == 0)
+      asmeul_unload_sound(engine, Int32(track.id))
+      asmeul_collect_sounds(engine)
+      assert(asmeul_sound_bytes(engine) == 0)
     }
     print("PASS: all 25 full recordings decode, transfer, render and release independently; total PCM \(totalBytes) bytes, largest \(maxBytes) bytes")
 
@@ -61,8 +61,8 @@ extension Bundle {
     catch { }
     let recovered = try await loader.prepare(url: urls[33]!, slot: 33)
     assert(recovered.install(into: engine))
-    hollow_unload_sound(engine, 33)
-    assert(hollow_sound_bytes(engine) == 0)
+    asmeul_unload_sound(engine, 33)
+    assert(asmeul_sound_bytes(engine) == 0)
 
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: folder) }
@@ -71,8 +71,8 @@ extension Bundle {
     assert(duration > 0 && FileManager.default.fileExists(atPath: imported.path))
     let custom = try await loader.prepare(url: imported, slot: 21)
     assert(custom.install(into: engine))
-    hollow_unload_sound(engine, 21)
-    assert(hollow_sound_bytes(engine) == 0)
+    asmeul_unload_sound(engine, 21)
+    assert(asmeul_sound_bytes(engine) == 0)
     print("PASS: cancellation, invalid file recovery, asynchronous custom MP3 import and later playback")
   }
 }

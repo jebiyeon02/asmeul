@@ -1,4 +1,4 @@
 HRTF measurements: Bill Gardner and Keith Martin, MIT Media Lab. Copyright 1994 MIT Media Laboratory.
 https://sound.media.mit.edu/resources/KEMAR.html
 Provided free with no restrictions on use, provided authors are cited in research or commercial applications.
-Hollow uses seven compact 128-tap stereo responses, mirrors ears for left directions and resamples to device rate.
+ASMEUL uses seven compact 128-tap stereo responses, mirrors ears for left directions and resamples to device rate.

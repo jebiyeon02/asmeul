@@ -14,15 +14,15 @@ int main(){
     producer.join();
     Engine e;
     std::vector<float> sound(8192,0.2f),out(8192);
-    assert(hollow_load_sound(&e,0,sound.data(),4096,48000));
-    hollow_configure(&e,0,0,0,1,0);hollow_spatial(&e,0);
-    hollow_mix(&e,1,1,1);hollow_track_gain(&e,0,1);
+    assert(asmeul_load_sound(&e,0,sound.data(),4096,48000));
+    asmeul_configure(&e,0,0,0,1,0);asmeul_spatial(&e,0);
+    asmeul_mix(&e,1,1,1);asmeul_track_gain(&e,0,1);
     e.dsp.prepare(48000);
     AudioBufferList output={1,{{2,UInt32(out.size()*sizeof(float)),out.data()}}};
     // An inactive selected app never calls capture. Output must still render ASMR.
     for(int i=0;i<20;i++)render(0,nullptr,nullptr,nullptr,&output,nullptr,&e);
     assert(e.callbacks==20 && e.dsp.peak>0.01f);
-    hollow_track_gain(&e,0,0);
+    asmeul_track_gain(&e,0,0);
     for(int i=0;i<30;i++)render(0,nullptr,nullptr,nullptr,&output,nullptr,&e);
     assert(e.dsp.peak<0.001f);
     // Permission denial can deliver valid, zero-filled callbacks. Neither
@@ -45,13 +45,13 @@ int main(){
     assert(e.dsp.peak>0.1f);
     render(0,nullptr,nullptr,nullptr,&output,nullptr,&e);
     assert(e.dsp.peak<0.001f);
-    hollow_track_gain(&e,0,1);
+    asmeul_track_gain(&e,0,1);
     for(int i=0;i<20;i++){
         capture(0,nullptr,&input,nullptr,nullptr,nullptr,&e);
         render(0,nullptr,nullptr,nullptr,&output,nullptr,&e);
     }
     assert(out.back()>0.39f && out.back()<0.41f); // Music + ASMR, independently audible.
-    hollow_stop(&e);
+    asmeul_stop(&e);
     assert(!e.inputSignal && !e.routingInput);
     std::cout<<"PASS: concurrent queue, ASMR without capture, denied capture preserves original, no duplicate playback, music + ASMR and restart reset\n";
 }

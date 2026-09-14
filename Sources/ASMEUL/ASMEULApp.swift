@@ -168,28 +168,24 @@ struct ContentView: View {
           GeometryReader { proxy in
             let availableHeight = max(0, proxy.size.height - 36)
             let scrollHeight = max(180, availableHeight - 58 - 58 - 36)
-            AdaptiveGlassContainer {
-              HStack(spacing: 22) {
-                Sidebar(model: model).frame(height: availableHeight)
-                VStack(spacing: 18) {
-                  header
-                  ScrollView {
-                    // Keep the shared card effect inside the scroll clipping boundary.
-                    AdaptiveGlassContainer {
-                      LazyVGrid(
-                        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                        spacing: 12
-                      ) {
-                        ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
-                      }.padding(.vertical, 2)
-                    }
+            HStack(spacing: 22) {
+              Sidebar(model: model).frame(height: availableHeight)
+              VStack(spacing: 18) {
+                header
+                ScrollView {
+                  LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    spacing: 12
+                  ) {
+                    ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
                   }
-                  .scrollIndicators(.hidden)
-                  .frame(height: scrollHeight)
-                  BottomBar(model: model)
+                  .padding(.vertical, 2)
                 }
-                .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
+                .scrollIndicators(.hidden)
+                .frame(height: scrollHeight)
+                BottomBar(model: model)
               }
+              .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(18)
@@ -1572,20 +1568,6 @@ private struct FocusDockDetails: View {
     .padding(.horizontal, 18)
     .padding(.top, 11)
     .padding(.bottom, 7)
-  }
-}
-
-struct AdaptiveGlassContainer<Content: View>: View {
-  let content: Content
-  init(@ViewBuilder content: () -> Content) { self.content = content() }
-  @ViewBuilder var body: some View {
-    if #available(macOS 26.0, *) {
-      // Share glass rendering without merging cards across their 12-point gaps.
-      // This is the effect's merging threshold, not the layout's spacing.
-      GlassEffectContainer(spacing: 0) { content }
-    } else {
-      content
-    }
   }
 }
 

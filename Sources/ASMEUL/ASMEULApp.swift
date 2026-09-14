@@ -168,23 +168,28 @@ struct ContentView: View {
           GeometryReader { proxy in
             let availableHeight = max(0, proxy.size.height - 36)
             let scrollHeight = max(180, availableHeight - 58 - 58 - 36)
-            HStack(spacing: 22) {
-              Sidebar(model: model).frame(height: availableHeight)
-              VStack(spacing: 18) {
-                header
-                ScrollView {
-                  LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                    spacing: 12
-                  ) {
-                    ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
-                  }.padding(.vertical, 2)
+            AdaptiveGlassContainer {
+              HStack(spacing: 22) {
+                Sidebar(model: model).frame(height: availableHeight)
+                VStack(spacing: 18) {
+                  header
+                  ScrollView {
+                    // Keep the shared card effect inside the scroll clipping boundary.
+                    AdaptiveGlassContainer {
+                      LazyVGrid(
+                        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                        spacing: 12
+                      ) {
+                        ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
+                      }.padding(.vertical, 2)
+                    }
+                  }
+                  .scrollIndicators(.hidden)
+                  .frame(height: scrollHeight)
+                  BottomBar(model: model)
                 }
-                .scrollIndicators(.hidden)
-                .frame(height: scrollHeight)
-                BottomBar(model: model)
+                .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
               }
-              .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(18)
@@ -639,14 +644,14 @@ struct AmbientFog: View {
 
   var body: some View {
     ZStack {
-      // The broad, slow lights do not need the particle refresh rate.
-      MotionTimeline(isRunning: animationsEnabled && isPlaying, framesPerSecond: 15) { time in
+      // Keep broad lights at 60 Hz; faster particles can use high-refresh displays.
+      MotionTimeline(isRunning: animationsEnabled && isPlaying, framesPerSecond: 60) { time in
         AmbientFogFrame(
           time: animationsEnabled ? time : 0, theme: theme,
           activeTrackIDs: activeTrackIDs)
       }
       if animationsEnabled {
-        MotionTimeline(isRunning: isPlaying) { time in
+        MotionTimeline(isRunning: isPlaying, framesPerSecond: 120) { time in
           AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
         }
       }
@@ -1337,7 +1342,7 @@ private struct CinematicEnvironment: View {
     ZStack {
       FocusPhotoBackground(photo: photo, isAnimating: animationsEnabled && isPlaying)
       if animationsEnabled && !activeTrackIDs.isEmpty {
-        MotionTimeline(isRunning: isPlaying) { time in
+        MotionTimeline(isRunning: isPlaying, framesPerSecond: 120) { time in
           AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
         }
       }
@@ -1575,9 +1580,9 @@ struct AdaptiveGlassContainer<Content: View>: View {
   init(@ViewBuilder content: () -> Content) { self.content = content() }
   @ViewBuilder var body: some View {
     if #available(macOS 26.0, *) {
-      // Keep adjacent cards optically separate. Liquid Glass uses this spacing
-      // threshold to decide when nearby shapes should morph together.
-      GlassEffectContainer(spacing: 28) { content }
+      // Share glass rendering without merging cards across their 12-point gaps.
+      // This is the effect's merging threshold, not the layout's spacing.
+      GlassEffectContainer(spacing: 0) { content }
     } else {
       content
     }

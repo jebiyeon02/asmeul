@@ -15,7 +15,7 @@ extension EnvironmentValues {
 
 struct MotionTimeline<Content: View>: View {
   let isRunning: Bool
-  var framesPerSecond: Double = 30
+  let framesPerSecond: Double
   @ViewBuilder let content: (TimeInterval) -> Content
   @Environment(\.motionVisible) private var visible
   @Environment(\.accessibilityReduceMotion) private var reduceMotion

@@ -1,4 +1,5 @@
 #include "../Sources/AudioCore/Binaural.hpp"
+#include "../Sources/AudioCore/Soundscape.hpp"
 #include "Fixtures/BinauralReference.hpp"
 #include <cassert>
 #include <chrono>
@@ -7,9 +8,17 @@
 #include <vector>
 
 volatile float benchmarkSink=0;
+template<class Spatializer> void prepareVoices(std::vector<Spatializer> &voices,double rate){
+    for(auto &voice:voices)voice.prepare(rate);
+}
+void prepareVoices(std::vector<Binaural> &voices,double rate){
+    // Match Soundscape: one coefficient bank for all voices at the output rate.
+    auto bank=std::make_shared<const Binaural::KernelBank>(rate);
+    for(auto &voice:voices)voice.prepare(bank);
+}
 template<class Spatializer> double benchmark(double rate,int tracks){
     std::vector<Spatializer> voices(tracks);
-    for(auto &voice:voices)voice.prepare(rate);
+    prepareVoices(voices,rate);
     auto start=std::chrono::steady_clock::now();
     float sum=0;
     for(int frame=0;frame<int(rate*2);frame++)for(int slot=0;slot<tracks;slot++){
@@ -20,6 +29,13 @@ template<class Spatializer> double benchmark(double rate,int tracks){
     return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
 }
 int main(){
+    {
+        auto start=std::chrono::steady_clock::now();
+        Soundscape mixer;
+        for(int i=0;i<100;i++)mixer.prepare(i%2?48000:96000);
+        auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+        std::cout<<"Soundscape inline storage: "<<sizeof(Soundscape)<<" bytes; 100 alternating-rate preparations: "<<elapsed<<"ms\n";
+    }
     float worst=0;
     for(double rate:{44100.,48000.,96000.,192000.}){
         Binaural optimized;BinauralReference reference;

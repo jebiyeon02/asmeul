@@ -11,7 +11,7 @@
 // Independent loop players. PCM is decoded in chunks off the render thread and
 // stored as 16-bit stereo to keep long recordings bounded in memory.
 class Soundscape {
-    static constexpr int capacity=35;
+    static constexpr int capacity=36;
     struct Sample {std::vector<int16_t> pcm;double rate=0,crossfade=0;size_t frames=0,written=0;};
     std::array<std::atomic<const Sample*>,capacity> banks{};
     std::array<std::unique_ptr<Sample>,capacity> pending;
@@ -102,7 +102,12 @@ public:
         p.spatial=targetSpatial.load();for(int i=0;i<capacity;i++){p.directions[i]=targetDirections[i].load();p.distances[i]=targetDistances[i].load();}
         p.ambient=std::clamp(targetAmbient.load(),0.f,1.f);p.music=std::clamp(targetMusic.load(),0.f,1.f);p.fade=std::clamp(targetFade.load(),0.f,1.f);return p;
     }
-    void prepare(double sampleRate){rate=sampleRate;for(auto &s:spatializers)s.prepare(rate);smoothing=1-std::exp(-1.f/float(rate*.04));position.fill(0);gains.fill(0);music=targetMusic.load();ambient=targetAmbient.load();fade=targetFade.load();}
+    void prepare(double sampleRate){
+        rate=sampleRate;
+        auto kernels=std::make_shared<const Binaural::KernelBank>(rate);
+        for(auto &s:spatializers)s.prepare(kernels);
+        smoothing=1-std::exp(-1.f/float(rate*.04));position.fill(0);gains.fill(0);music=targetMusic.load();ambient=targetAmbient.load();fade=targetFade.load();
+    }
     void next(float &l,float &r,const Params &p,float active){
         music+=(p.music-music)*smoothing;ambient+=(p.ambient-ambient)*smoothing;fade+=(p.fade-fade)*smoothing;
         float bedL=0,bedR=0;

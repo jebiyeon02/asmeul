@@ -265,9 +265,11 @@ struct ContentView: View {
       Button {
         model.toggle()
       } label: {
-        Label(model.running ? "중지" : "재생", systemImage: model.running ? "stop.fill" : "play.fill")
+        Label(
+          model.playbackActive ? "중지" : "재생",
+          systemImage: model.playbackActive ? "stop.fill" : "play.fill")
           .font(.system(size: 11, weight: .semibold)).padding(.horizontal, 16).padding(.vertical, 9)
-      }.buttonStyle(GoldButtonStyle(active: model.running)).disabled(!model.assetsReady)
+      }.buttonStyle(GoldButtonStyle(active: model.playbackActive)).disabled(!model.assetsReady)
         .accessibilityIdentifier("power")
     }.frame(height: 58)
   }
@@ -325,7 +327,7 @@ struct SettingsView: View {
       .overlay(RoundedRectangle(cornerRadius: 14).stroke(hairline, lineWidth: 0.7))
 
       Spacer()
-      Text("음원 선택에 따라 비·파도·바람·불씨·반딧불이·물방울 등의 움직임이 자동으로 바뀝니다.")
+      Text("음원 선택에 따라 비·파도·바람·불씨·반딧불이·물방울·낙엽 등의 움직임이 자동으로 바뀝니다.")
         .font(.system(size: 9))
         .foregroundStyle(Color.white.opacity(0.35))
         .fixedSize(horizontal: false, vertical: true)
@@ -561,14 +563,14 @@ struct BottomBar: View {
       Button {
         model.toggle()
       } label: {
-        Image(systemName: model.running ? "pause.fill" : "play.fill")
+        Image(systemName: model.playbackActive ? "pause.fill" : "play.fill")
           .font(.system(size: 15, weight: .semibold)).frame(width: 38, height: 38)
           .background(
-            model.running ? accent.opacity(0.16) : Color.white.opacity(0.04), in: Circle()
+            model.playbackActive ? accent.opacity(0.16) : Color.white.opacity(0.04), in: Circle()
           )
-          .overlay(Circle().stroke(model.running ? accent : hairline, lineWidth: 1.2))
-          .foregroundStyle(model.running ? accent : Color.white.opacity(0.72))
-          .shadow(color: model.running ? accent.opacity(0.35) : .clear, radius: 10)
+          .overlay(Circle().stroke(model.playbackActive ? accent : hairline, lineWidth: 1.2))
+          .foregroundStyle(model.playbackActive ? accent : Color.white.opacity(0.72))
+          .shadow(color: model.playbackActive ? accent.opacity(0.35) : .clear, radius: 10)
       }
       .buttonStyle(.plain)
       .disabled(!model.assetsReady)
@@ -744,6 +746,7 @@ private struct AmbientFogFrame: View {
 
   private var primaryLight: Color {
     if fireActive { return .orange }
+    if leavesActive { return .orange }
     if snowActive { return .white }
     if rainActive { return .blue }
     if waveActive { return .cyan }
@@ -763,6 +766,7 @@ private struct AmbientFogFrame: View {
 
   private var secondaryLight: Color {
     if fireActive { return .red }
+    if leavesActive { return .red }
     if snowActive { return .cyan }
     if rainActive { return .cyan }
     if waveActive { return .blue }
@@ -782,6 +786,7 @@ private struct AmbientFogFrame: View {
 
   private var warmLight: Color {
     if fireActive { return .yellow }
+    if leavesActive { return .yellow }
     if snowActive { return .blue }
     if rainActive { return .indigo }
     if waveActive { return .mint }
@@ -829,6 +834,8 @@ private struct AmbientFogFrame: View {
 
   private var snowActive: Bool { activeTrackIDs.contains(32) }
 
+  private var leavesActive: Bool { activeTrackIDs.contains(35) }
+
   private var waveActive: Bool {
     activeTrackIDs.contains(10) || activeTrackIDs.contains(14) || activeTrackIDs.contains(15)
   }
@@ -872,6 +879,7 @@ private struct AmbientParticles: View {
       if pencilActive { drawPencil(&context, size: size, time: t) }
       if cityActive { drawCity(&context, size: size, time: t) }
       if chimesActive { drawChimes(&context, size: size, time: t) }
+      if leavesActive { drawLeaves(&context, size: size, time: t) }
       if fireActive { drawFire(&context, size: size, time: t) }
       if customActive || activeTrackIDs.isEmpty { drawDust(&context, size: size, time: t) }
     }
@@ -1104,6 +1112,53 @@ private struct AmbientParticles: View {
     }
   }
 
+  private func drawLeaves(_ context: inout GraphicsContext, size: CGSize, time: Double) {
+    let palette: [Color] = [
+      Color(red: 0.96, green: 0.58, blue: 0.18),
+      Color(red: 0.82, green: 0.28, blue: 0.12),
+      Color(red: 0.72, green: 0.43, blue: 0.16),
+      Color(red: 0.98, green: 0.72, blue: 0.26),
+    ]
+    for index in 0..<30 {
+      let seed = Double(index)
+      let fallSpeed = 0.018 + fraction(seed * 0.173) * 0.022
+      let cycle = fraction(seed * 0.137 + time * fallSpeed)
+      let baseX = fraction(seed * 0.61803398875 + 0.11) * size.width
+      let drift = sin(time * (0.22 + fraction(seed * 0.19) * 0.16) + seed * 1.41)
+        * (18 + fraction(seed * 0.31) * 42)
+      let center = CGPoint(
+        x: baseX + drift,
+        y: cycle * (size.height + 110) - 55)
+      let width = 8 + fraction(seed * 0.43) * 9
+      let height = width * (0.48 + fraction(seed * 0.27) * 0.18)
+      let angle = time * (0.55 + fraction(seed * 0.37) * 0.8) + seed * 2.2
+
+      func point(_ x: Double, _ y: Double) -> CGPoint {
+        CGPoint(
+          x: center.x + x * cos(angle) - y * sin(angle),
+          y: center.y + x * sin(angle) + y * cos(angle))
+      }
+
+      var leaf = Path()
+      leaf.move(to: point(-width * 0.58, 0))
+      leaf.addCurve(
+        to: point(width * 0.58, 0),
+        control1: point(-width * 0.18, -height),
+        control2: point(width * 0.28, -height * 0.74))
+      leaf.addCurve(
+        to: point(-width * 0.58, 0),
+        control1: point(width * 0.28, height * 0.74),
+        control2: point(-width * 0.18, height))
+      let alpha = 0.16 + fraction(seed * 0.29) * 0.18
+      context.fill(leaf, with: .color(palette[index % palette.count].opacity(alpha)))
+
+      var vein = Path()
+      vein.move(to: point(-width * 0.7, 0))
+      vein.addLine(to: point(width * 0.42, 0))
+      context.stroke(vein, with: .color(Color.yellow.opacity(alpha * 0.55)), lineWidth: 0.55)
+    }
+  }
+
   private func drawDust(_ context: inout GraphicsContext, size: CGSize, time: Double) {
     let color: Color = theme == .deepSea ? .cyan : (theme == .aurora ? .mint : .orange)
     for index in 0..<22 {
@@ -1128,6 +1183,8 @@ private struct AmbientParticles: View {
   }
 
   private var snowActive: Bool { activeTrackIDs.contains(32) }
+
+  private var leavesActive: Bool { activeTrackIDs.contains(35) }
 
   private var waveActive: Bool {
     activeTrackIDs.contains(10) || activeTrackIDs.contains(14) || activeTrackIDs.contains(15)
@@ -1453,15 +1510,15 @@ struct FocusDock: View {
       Button {
         model.toggle()
       } label: {
-        Image(systemName: model.running ? "pause.fill" : "play.fill")
+        Image(systemName: model.playbackActive ? "pause.fill" : "play.fill")
           .font(.system(size: 18, weight: .semibold))
           .frame(width: 58, height: 58)
           .background(
-            model.running ? accent.opacity(0.25) : Color.white.opacity(0.06),
+            model.playbackActive ? accent.opacity(0.25) : Color.white.opacity(0.06),
             in: Circle())
           .overlay(Circle().stroke(accent.opacity(0.78), lineWidth: 1.2))
-          .foregroundStyle(model.running ? accent : Color.white.opacity(0.84))
-          .shadow(color: accent.opacity(model.running ? 0.42 : 0.12), radius: 14)
+          .foregroundStyle(model.playbackActive ? accent : Color.white.opacity(0.84))
+          .shadow(color: accent.opacity(model.playbackActive ? 0.42 : 0.12), radius: 14)
       }
       .buttonStyle(.plain)
       .disabled(!model.assetsReady)
@@ -1640,7 +1697,7 @@ struct MenuPanel: View {
         Button {
           model.toggle()
         } label: {
-          Image(systemName: model.running ? "pause.fill" : "play.fill")
+          Image(systemName: model.playbackActive ? "pause.fill" : "play.fill")
         }
         .buttonStyle(.plain).foregroundStyle(accent)
       }

@@ -11,12 +11,12 @@ extension Bundle {
     let engine = hollow_create()!
     defer { hollow_destroy(engine) }
     let durations = try SoundLibrary.loadResources(into: engine)
-    guard durations.count == 24, durations[1, default: 0] > 930,
+    guard durations.count == 25, durations[1, default: 0] > 930,
       durations[14, default: 0] > 20, durations[20, default: 0] > 80,
       durations[32, default: 0] > 40, durations[33, default: 0] > 4,
-      durations[34, default: 0] > 4
+      durations[34, default: 0] > 4, durations[35, default: 0] > 4
     else { throw CocoaError(.fileReadCorruptFile) }
-    print("PASS: all 24 bundled files decoded, including snow steps, deep-space drones, and the existing wave, fire, birds, cicada and underwater sounds")
+    print("PASS: all 25 bundled files decoded, including fallen leaves, snow steps, deep-space drones, and the existing wave, fire, birds, cicada and underwater sounds")
     let resourceBundle = Bundle(path: CommandLine.arguments[1])!
     guard let importURL = resourceBundle.url(forResource: "user-wave-1.mp3", withExtension: nil),
       try SoundLibrary.load(url: importURL, slot: 21, into: engine) > 20

@@ -38,6 +38,8 @@ struct ASMRTrack: Identifiable, Codable {
       id: 34, name: "심우주2", file: "user-deep-space-2.mp3", symbol: "moon.stars", supplied: true),
     .init(
       id: 32, name: "눈 밟는 소리", file: "snow_step.mp3", symbol: "snowflake", supplied: true),
+    .init(
+      id: 35, name: "낙엽 밟는 소리", file: "fallen-leaves.mp3", symbol: "leaf.fill", supplied: true),
   ]
 }
 struct TrackSetting: Codable, Identifiable, Equatable {
@@ -103,7 +105,7 @@ enum SoundLibrary {
     let format = file.processingFormat
     guard file.length >= 4, file.length <= AVAudioFramePosition(format.sampleRate * 3600),
       file.length <= UInt32.max,
-      (0..<35).contains(slot),
+      (0..<36).contains(slot),
       hollow_begin_sound(engine, Int32(slot), UInt32(file.length), format.sampleRate) == 1,
       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65536)
     else { throw CocoaError(.fileReadCorruptFile) }

@@ -2,8 +2,12 @@ import AppKit
 import AudioCore
 import Carbon
 import CoreAudio
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
+
+private let sourceLogger = Logger(
+  subsystem: "studio.hollow.prototype", category: "AudioSource")
 
 struct EnvironmentPhoto: Identifiable, Hashable, Codable {
   let id: String
@@ -136,6 +140,9 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   private var importTask: Task<Void, Never>?
   private var shuttingDown = false
   private var pendingSourceRefresh: DispatchWorkItem?
+  private var sourceRetryWorkItem: DispatchWorkItem?
+  private var sourceRetryAttempt = 0
+  private let sourceRetryDelays: [TimeInterval] = [0.15, 0.4, 0.8, 1.5]
   private var hardwareListeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
   private var capturedProcessIDs: [UInt32] = []
   private var captureWaitTicks = 0
@@ -145,6 +152,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   private var memories: [String: SavedMood] = [:]
   private var pendingMoodSave: DispatchWorkItem?
   private var restoringMood = false
+  var playbackActive: Bool { running || waitingForMusic }
   var selectedTrackCount: Int { tracks.reduce(0) { $0 + ($1.enabled ? 1 : 0) } }
   var memoryKey: String { processes.first(where: { $0.id == selected })?.bundleID ?? "system" }
   var activeTrackIDs: Set<Int> { Set(tracks.filter(\.enabled).map(\.id)) }
@@ -231,8 +239,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   func defaultDirection(_ id: Int) -> Int {
     [
       1, 2, 4, 1, 1, 2, 2, 3, 4, 3, 0, 6, 5, 4, 1, 2, 3, 3, 1, 2, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1, 2,
-      3, 4, 5, 1,
-    ][min(34, max(0, id))]
+      3, 4, 5, 1, 3,
+    ][min(35, max(0, id))]
   }
   func setPosition(_ id: Int, direction: Int? = nil, distance: Double? = nil) {
     guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
@@ -353,7 +361,11 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       self.pendingSourceRefresh = nil
       self.refreshProcesses()
       self.updateOutput()
-      self.tick()
+      if self.waitingForMusic && !self.running {
+        self.startWhenSourceIsReady()
+      } else {
+        self.tick()
+      }
     }
     pendingSourceRefresh = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
@@ -416,7 +428,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   }
   func changeSource(_ id: UInt32) {
     guard selected != id else { return }
-    let resume = running
+    let resume = running || waitingForMusic
     rememberMood()
     stop(message: "소스를 변경했습니다.")
     selected = id
@@ -429,24 +441,48 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     rememberMood()
     if resume { start() }
   }
-  func toggle() { if running { stop() } else { start() } }
+  func toggle() { if running || waitingForMusic { stop() } else { start() } }
   func toggleFocusMode() { focusMode.toggle() }
   func start() {
+    cancelSourceRetry()
+    sourceRetryAttempt = 0
+    startWhenSourceIsReady()
+  }
+
+  private func startWhenSourceIsReady() {
     guard assetsReady else { return }
     error = nil
     refreshProcesses()
-    guard selected == 0 || processes.contains(where: { $0.id == selected }) else {
+
+    let processIDs: [UInt32]
+    switch resolveAudioSource(selected: selected, sources: processes) {
+    case .system:
+      processIDs = []
+    case .missingApplication:
+      cancelSourceRetry()
+      waitingForMusic = false
       error = "선택한 앱이 종료되었습니다. 다른 소스를 선택하세요."
       return
+    case .waitingForProcesses:
+      waitForSelectedSource()
+      return
+    case .processes(let ids):
+      processIDs = ids
     }
+
+    cancelSourceRetry()
+    sourceRetryAttempt = 0
+    waitingForMusic = false
     configure()
     configureTracks()
-    let ids = processes.first(where: { $0.id == selected })?.processIDs ?? []
-    let result = selected == 0 ? hollow_start(engine, 0) : ids.withUnsafeBufferPointer {
+    let idText = processIDs.map { String($0) }.joined(separator: ",")
+    sourceLogger.info(
+      "starting selectedPid=\(self.selected, privacy: .public) coreAudioObjectIDs=[\(idText, privacy: .public)]")
+    let result = selected == 0 ? hollow_start(engine, 0) : processIDs.withUnsafeBufferPointer {
       hollow_start_processes(engine, $0.baseAddress, UInt32($0.count))
     }
     if result == 0 {
-      capturedProcessIDs = ids
+      capturedProcessIDs = processIDs
       captureWaitTicks = 0
       waitingForMusic = false
       running = true
@@ -457,12 +493,58 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       stalled = 0
       updateOutput()
     } else {
+      waitingForMusic = false
       error =
         "오디오를 시작하지 못했습니다: \(String(cString:hollow_error(engine))). 시스템 설정에서 아스믈의 시스템 오디오 녹음 권한과 출력 장치를 확인하세요."
       running = false
     }
   }
+
+  private func waitForSelectedSource() {
+    running = false
+    waitingForMusic = true
+    capturedProcessIDs = []
+    let sourceName = processes.first(where: { $0.id == selected })?.name ?? "선택한 앱"
+    status = "\(sourceName) 음악 입력 대기 중 · 원음 유지"
+    sourceLogger.info(
+      "waiting selectedPid=\(self.selected, privacy: .public) coreAudioObjectIDs=[] attempt=\(self.sourceRetryAttempt, privacy: .public)")
+
+    guard sourceRetryWorkItem == nil, sourceRetryAttempt < sourceRetryDelays.count else { return }
+    let delay = sourceRetryDelays[sourceRetryAttempt]
+    sourceRetryAttempt += 1
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, !self.shuttingDown, self.waitingForMusic, !self.running else { return }
+      self.sourceRetryWorkItem = nil
+      self.startWhenSourceIsReady()
+    }
+    sourceRetryWorkItem = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+  }
+
+  private func cancelSourceRetry() {
+    sourceRetryWorkItem?.cancel()
+    sourceRetryWorkItem = nil
+  }
+
+  private func rebuildForChangedSource() {
+    let source = processes.first(where: { $0.id == selected })
+    let idText = source?.processIDs.map { String($0) }.joined(separator: ",") ?? ""
+    sourceLogger.info(
+      "rebuilding selectedPid=\(self.selected, privacy: .public) coreAudioObjectIDs=[\(idText, privacy: .public)]")
+    hollow_stop(engine)
+    monitorTimer?.invalidate()
+    monitorTimer = nil
+    running = false
+    capturedProcessIDs = []
+    meter.reset()
+    cancelSourceRetry()
+    sourceRetryAttempt = 0
+    startWhenSourceIsReady()
+  }
+
   func stop(message: String = "효과를 껐습니다. 앱의 원래 소리로 재생됩니다.") {
+    cancelSourceRetry()
+    sourceRetryAttempt = 0
     hollow_stop(engine)
     monitorTimer?.invalidate()
     monitorTimer = nil
@@ -548,15 +630,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     if selected != 0, let source = processes.first(where: { $0.id == selected }),
       source.processIDs != capturedProcessIDs
     {
-      let result = source.processIDs.withUnsafeBufferPointer {
-        hollow_update_processes(engine, $0.baseAddress, UInt32($0.count))
-      }
-      if result == 0 {
-        capturedProcessIDs = source.processIDs
-      } else {
-        stop(message: "앱의 오디오 연결이 바뀌어 다시 연결합니다.")
-        start()
-      }
+      status = "앱의 오디오 연결이 바뀌어 다시 연결합니다."
+      rebuildForChangedSource()
     }
   }
   func refreshProcesses() {

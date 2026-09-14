@@ -14,9 +14,9 @@ extension Bundle {
       ($0.id, try SoundLibrary.resourceURL(for: $0))
     })
     let metadata = await loader.metadata(urls)
-    assert(metadata.count == 24 && metadata[1, default: 0] > 930)
+    assert(metadata.count == 25 && metadata[1, default: 0] > 930)
     assert(hollow_sound_bytes(engine) == 0)
-    print("PASS: duration metadata for all 24 recordings without retaining PCM")
+    print("PASS: duration metadata for all 25 recordings without retaining PCM")
 
     var totalBytes: UInt64 = 0
     var maxBytes: UInt64 = 0
@@ -39,7 +39,7 @@ extension Bundle {
       hollow_collect_sounds(engine)
       assert(hollow_sound_bytes(engine) == 0)
     }
-    print("PASS: all 24 full recordings decode, transfer, render and release independently; total PCM \(totalBytes) bytes, largest \(maxBytes) bytes")
+    print("PASS: all 25 full recordings decode, transfer, render and release independently; total PCM \(totalBytes) bytes, largest \(maxBytes) bytes")
 
     // Main-actor work runs while a lengthy recording decodes on the serial actor.
     let decoding = Task(priority: .utility) { try await loader.prepare(url: urls[1]!, slot: 1) }

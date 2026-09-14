@@ -192,7 +192,7 @@ int hollow_take_sound(HollowEngine destination,HollowEngine source,int slot){
 void hollow_collect_sounds(HollowEngine raw){auto &e=*static_cast<Engine*>(raw);if(e.proc)e.dsp.soundscape.collectRetired();else e.dsp.soundscape.reclaimRetired();}
 uint64_t hollow_sound_bytes(HollowEngine raw){return static_cast<Engine*>(raw)->dsp.soundscape.residentSampleBytes();}
 void hollow_unload_sound(HollowEngine e,int slot){auto &engine=*static_cast<Engine*>(e);engine.dsp.soundscape.unload(slot);if(!engine.proc)engine.dsp.soundscape.reclaimRetired();}
-void hollow_track_gain(HollowEngine e,int slot,float gain){if(slot>=0&&slot<35)static_cast<Engine*>(e)->dsp.soundscape.targetGains[slot]=std::isfinite(gain)?std::clamp(gain,0.f,1.f):0;}
+void hollow_track_gain(HollowEngine e,int slot,float gain){if(slot>=0&&slot<36)static_cast<Engine*>(e)->dsp.soundscape.targetGains[slot]=std::isfinite(gain)?std::clamp(gain,0.f,1.f):0;}
 void hollow_mix(HollowEngine e,float ambience,float music,float fade){auto &s=static_cast<Engine*>(e)->dsp.soundscape;s.targetAmbient=ambience;s.targetMusic=music;s.targetFade=fade;}
 float hollow_peak(HollowEngine e){return static_cast<Engine*>(e)->dsp.peak.load();}
 uint64_t hollow_callbacks(HollowEngine e){return static_cast<Engine*>(e)->callbacks.load();}
@@ -202,4 +202,4 @@ const char *hollow_error(HollowEngine e){return static_cast<Engine*>(e)->error.c
 }
 
 void hollow_spatial(HollowEngine raw,int enabled){static_cast<Engine*>(raw)->dsp.soundscape.targetSpatial=enabled!=0;}
-void hollow_position(HollowEngine raw,int slot,int direction,float distance){if(slot<0||slot>=35)return;auto &s=static_cast<Engine*>(raw)->dsp.soundscape;s.targetDirections[slot]=std::clamp(direction,0,6);s.targetDistances[slot]=std::isfinite(distance)?std::clamp(distance,0.f,1.f):0;}
+void hollow_position(HollowEngine raw,int slot,int direction,float distance){if(slot<0||slot>=36)return;auto &s=static_cast<Engine*>(raw)->dsp.soundscape;s.targetDirections[slot]=std::clamp(direction,0,6);s.targetDistances[slot]=std::isfinite(distance)?std::clamp(distance,0.f,1.f):0;}

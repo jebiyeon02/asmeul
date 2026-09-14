@@ -1253,7 +1253,7 @@ struct EnvironmentThumbnail: View {
     .accessibilityLabel(photo.title)
     .accessibilityValue(selected ? "선택됨" : "선택 안 됨")
     .task(id: photo.fileName) {
-      guard let url = Bundle.module.url(forResource: photo.fileName, withExtension: nil) else { return }
+      guard let url = AppResources.url(forResource: photo.fileName) else { return }
       let decoded = await EnvironmentImageStore.shared.image(at: url, maxPixelSize: 512)
       guard !Task.isCancelled else { return }
       image = decoded
@@ -1380,7 +1380,7 @@ private struct FocusPhotoBackground: View {
       }
       .clipped()
       .task(id: "\(photo.fileName):\(pixels)") {
-        guard let url = Bundle.module.url(forResource: photo.fileName, withExtension: nil) else { return }
+        guard let url = AppResources.url(forResource: photo.fileName) else { return }
         let decoded = await EnvironmentImageStore.shared.image(at: url, maxPixelSize: pixels)
         guard !Task.isCancelled else { return }
         image = decoded

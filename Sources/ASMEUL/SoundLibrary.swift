@@ -48,12 +48,28 @@ struct TrackSetting: Codable, Identifiable, Equatable {
   var distance: Double? = nil
 }
 
+/// Resolves SwiftPM resources both while developing and after the executable is
+/// wrapped in a conventional macOS application bundle.
+enum AppResources {
+  static let bundle: Bundle = {
+    if let resourceURL = Bundle.main.resourceURL,
+      let installedBundle = Bundle(
+        url: resourceURL.appendingPathComponent("Hollow_Hollow.bundle", isDirectory: true))
+    {
+      return installedBundle
+    }
+    return Bundle.module
+  }()
+
+  static func url(forResource name: String, withExtension extensionName: String? = nil) -> URL? {
+    bundle.url(forResource: name, withExtension: extensionName)
+  }
+}
+
 /// Reads full recordings in bounded chunks. The source files are never modified.
 enum SoundLibrary {
   static func resourceURL(for track: ASMRTrack) throws -> URL {
-    let bundled = Bundle.main.resourceURL?.appendingPathComponent("Hollow_Hollow.bundle")
-    let resources = bundled.flatMap { Bundle(url: $0) } ?? Bundle.module
-    guard let url = resources.url(forResource: track.file, withExtension: nil) else {
+    guard let url = AppResources.url(forResource: track.file) else {
       throw CocoaError(.fileNoSuchFile)
     }
     return url
@@ -69,11 +85,9 @@ enum SoundLibrary {
   }
 
   static func loadResources(into engine: HollowEngine) throws -> [Int: Double] {
-    let bundled = Bundle.main.resourceURL?.appendingPathComponent("Hollow_Hollow.bundle")
-    let resources = bundled.flatMap { Bundle(url: $0) } ?? Bundle.module
     var durations: [Int: Double] = [:]
     for track in ASMRTrack.builtIn {
-      guard let url = resources.url(forResource: track.file, withExtension: nil) else {
+      guard let url = AppResources.url(forResource: track.file) else {
         throw CocoaError(.fileNoSuchFile)
       }
       durations[track.id] = try load(url: url, slot: track.id, into: engine)

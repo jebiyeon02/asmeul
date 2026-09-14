@@ -4,7 +4,7 @@ import Foundation
 
 struct ASMRTrack: Identifiable, Codable {
   let id: Int
-  let name: String
+  var name: String
   let file: String
   let symbol: String
   let supplied: Bool
@@ -23,7 +23,7 @@ struct ASMRTrack: Identifiable, Codable {
     .init(id: 10, name: "물결 1", file: "lake.mp3", symbol: "water.waves", supplied: false),
     .init(id: 11, name: "바람 1", file: "grass.mp3", symbol: "wind", supplied: false),
     .init(id: 12, name: "도시 소리 1", file: "city.mp3", symbol: "building.2", supplied: false),
-    .init(id: 13, name: "방울·나무 소리 1", file: "memory-chimes.wav", symbol: "bell", supplied: false),
+    .init(id: 13, name: "종 소리 1", file: "user-chimes.mp3", symbol: "bell", supplied: true),
     .init(id: 14, name: "파도 1", file: "user-wave-1.mp3", symbol: "water.waves", supplied: true),
     .init(id: 15, name: "파도 2", file: "user-wave-2.mp3", symbol: "water.waves", supplied: true),
     .init(id: 16, name: "지저귀는 새소리 1", file: "user-birds.mp3", symbol: "bird", supplied: true),
@@ -32,9 +32,15 @@ struct ASMRTrack: Identifiable, Codable {
     .init(id: 19, name: "모닥불 2", file: "user-fire-2.mp3", symbol: "flame.fill", supplied: true),
     .init(
       id: 20, name: "물속 1", file: "user-underwater.mp3", symbol: "drop.triangle", supplied: true),
+    .init(
+      id: 33, name: "심우주1", file: "user-deep-space-1.mp3", symbol: "sparkles", supplied: true),
+    .init(
+      id: 34, name: "심우주2", file: "user-deep-space-2.mp3", symbol: "moon.stars", supplied: true),
+    .init(
+      id: 32, name: "눈 밟는 소리", file: "snow_step.mp3", symbol: "snowflake", supplied: true),
   ]
 }
-struct TrackSetting: Codable, Identifiable {
+struct TrackSetting: Codable, Identifiable, Equatable {
   var id: Int
   var enabled: Bool = false
   var volume: Double = 0.45
@@ -44,6 +50,24 @@ struct TrackSetting: Codable, Identifiable {
 
 /// Reads full recordings in bounded chunks. The source files are never modified.
 enum SoundLibrary {
+  static func resourceURL(for track: ASMRTrack) throws -> URL {
+    let bundled = Bundle.main.resourceURL?.appendingPathComponent("Hollow_Hollow.bundle")
+    let resources = bundled.flatMap { Bundle(url: $0) } ?? Bundle.module
+    guard let url = resources.url(forResource: track.file, withExtension: nil) else {
+      throw CocoaError(.fileNoSuchFile)
+    }
+    return url
+  }
+
+  static func duration(at url: URL) throws -> Double {
+    let file = try AVAudioFile(forReading: url)
+    let seconds = Double(file.length) / file.processingFormat.sampleRate
+    guard file.length >= 4, seconds.isFinite, seconds <= 3600 else {
+      throw CocoaError(.fileReadCorruptFile)
+    }
+    return seconds
+  }
+
   static func loadResources(into engine: HollowEngine) throws -> [Int: Double] {
     let bundled = Bundle.main.resourceURL?.appendingPathComponent("Hollow_Hollow.bundle")
     let resources = bundled.flatMap { Bundle(url: $0) } ?? Bundle.module
@@ -58,17 +82,21 @@ enum SoundLibrary {
   }
 
   static func load(url: URL, slot: Int, into engine: HollowEngine) throws -> Double {
+    try Task.checkCancellation()
+    var finished = false
+    defer { if !finished { hollow_unload_sound(engine, Int32(slot)) } }
     let file = try AVAudioFile(forReading: url)
     let format = file.processingFormat
     guard file.length >= 4, file.length <= AVAudioFramePosition(format.sampleRate * 3600),
       file.length <= UInt32.max,
-      (0..<32).contains(slot),
+      (0..<35).contains(slot),
       hollow_begin_sound(engine, Int32(slot), UInt32(file.length), format.sampleRate) == 1,
       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65536)
     else { throw CocoaError(.fileReadCorruptFile) }
     var loaded: UInt64 = 0
     var stereo = [Float](repeating: 0, count: 65536 * 2)
     while file.framePosition < file.length {
+      try Task.checkCancellation()
       try file.read(
         into: buffer,
         frameCount: min(buffer.frameCapacity, UInt32(file.length - file.framePosition)))
@@ -90,6 +118,61 @@ enum SoundLibrary {
     guard hollow_finish_sound(engine, Int32(slot)) == 1 else {
       throw CocoaError(.fileReadCorruptFile)
     }
+    finished = true
     return Double(loaded) / format.sampleRate
+  }
+}
+
+/// The private decoder is never rendered. Once awaited, only the main actor
+/// transfers its immutable PCM into the live engine, then destroys the decoder.
+final class PreparedSound: @unchecked Sendable {
+  private let decoder: HollowEngine
+  let duration: Double
+  let slot: Int
+
+  init(url: URL, slot: Int) throws {
+    let engine = hollow_create()!
+    do { duration = try SoundLibrary.load(url: url, slot: slot, into: engine) }
+    catch { hollow_destroy(engine); throw error }
+    decoder = engine
+    self.slot = slot
+  }
+
+  func install(into engine: HollowEngine) -> Bool {
+    hollow_take_sound(engine, decoder, Int32(slot)) == 1
+  }
+
+  deinit { hollow_destroy(decoder) }
+}
+
+/// Serializes long decodes so selecting many tracks cannot flood the machine
+/// with concurrent decoding work or full-recording intermediate buffers.
+actor SoundLoader {
+  func importRecording(from source: URL, to destination: URL, slot: Int) throws -> Double {
+    try Task.checkCancellation()
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: source, to: destination)
+    do {
+      let prepared = try PreparedSound(url: destination, slot: slot)
+      try Task.checkCancellation()
+      return prepared.duration
+    } catch {
+      try? FileManager.default.removeItem(at: destination)
+      throw error
+    }
+  }
+
+  func prepare(url: URL, slot: Int) throws -> PreparedSound {
+    try Task.checkCancellation()
+    return try PreparedSound(url: url, slot: slot)
+  }
+
+  func metadata(_ urls: [Int: URL]) -> [Int: Double] {
+    var values: [Int: Double] = [:]
+    for (id, url) in urls {
+      if Task.isCancelled { break }
+      values[id] = try? SoundLibrary.duration(at: url)
+    }
+    return values
   }
 }

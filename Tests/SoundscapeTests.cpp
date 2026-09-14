@@ -12,6 +12,11 @@ int main(){
   cl=.3;cr=-.2;both.next(cl,cr,pc,0);assert(cl==.3f&&cr==-.2f);
   both.targetFade=0;pc=both.parameters();for(int i=0;i<rate;i++){cl=cr=0;both.next(cl,cr,pc,1);}assert(std::abs(cl)<1e-5);
   assert(!both.begin(-1,10,rate));assert(!both.append(3,x.data(),4));assert(!both.finish(3));assert(both.begin(3,4,rate));assert(!both.append(3,x.data(),5));assert(both.append(3,x.data(),4));assert(both.finish(3));
+  Soundscape reload;
+  assert(reload.load(3,x.data(),8000,rate));reload.targetGains[3]=.5f;reload.targetAmbient=1;reload.prepare(rate);
+  auto rp=reload.parameters();float rl=0,rr=0;reload.next(rl,rr,rp,1);assert(std::isfinite(rl)&&std::isfinite(rr));
+  reload.unload(3);rp=reload.parameters();for(int i=0;i<64;i++){rl=rr=0;reload.next(rl,rr,rp,1);assert(std::isfinite(rl)&&std::isfinite(rr));}
+  reload.reclaimRetired();
  }
  std::cout<<"PASS: simultaneous additive tracks, independent deselection, looping, bypass, fade and chunk validation at 3 rates\n";
 }

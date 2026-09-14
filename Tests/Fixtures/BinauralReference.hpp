@@ -1,16 +1,14 @@
+// Scalar reference retained to verify the accelerated convolution.
 #pragma once
-#include "HRTFData.hpp"
-#include <Accelerate/Accelerate.h>
+#include "../../Sources/AudioCore/HRTFData.hpp"
 #include <array>
 #include <cmath>
 #include <algorithm>
 // Measured HRIR convolution, no allocation in render. Seven fixed directions.
-class Binaural {
+class BinauralReference {
  static constexpr int historySize=1024;
  static constexpr int historyMask=historySize-1;
- // Mirrored history makes newest-to-oldest samples contiguous at every cursor,
- // allowing Accelerate to vectorize the FIR without per-tap ring indexing.
- std::array<float,2048> history{};
+ std::array<float,1024> history{};
  std::array<std::array<std::array<float,768>,2>,7> kernels{};
  std::array<float,7> weights{};
  int cursor=0,taps=128;float smooth=.001f,wet=0,dist=0;
@@ -26,25 +24,23 @@ public:
  void process(float &l,float &r,bool enabled,int direction,float distance){
   direction=std::clamp(direction,0,6);wet+=((enabled?1.f:0.f)-wet)*smooth;dist+=(distance-dist)*smooth;
   for(int d=0;d<7;d++)weights[d]+=((d==direction?1.f:0.f)-weights[d])*smooth;
-  history[cursor]=history[cursor+historySize]=(l+r)*.5f;
+  history[cursor]=(l+r)*.5f;
   // Keep the history and control smoothing warm while spatial audio is off,
   // but avoid the convolution work once the wet path has faded out.
   if(wet>.00001f){
    float a=0,b=0;
    for(int d=0;d<7;d++)if(weights[d]>.00001f){
-    float x=0,y=0;
-    vDSP_dotpr(history.data()+cursor,1,kernels[d][0].data(),1,&x,vDSP_Length(taps));
-    vDSP_dotpr(history.data()+cursor,1,kernels[d][1].data(),1,&y,vDSP_Length(taps));
+    float x=0,y=0;for(int j=0;j<taps;j++){float h=history[(cursor-j+historySize)&historyMask];x+=h*kernels[d][0][j];y+=h*kernels[d][1][j];}
     a+=x*weights[d];b+=y*weights[d];
    }
    // Low-level cross reflections provide an external room cue; distance sets
    // direct/reflected ratio and attenuation, not a calibrated metre estimate.
-   float echo=history[(cursor+std::min(1000,taps*2))&historyMask];
+   float echo=history[(cursor-std::min(1000,taps*2)+historySize)&historyMask];
    float attenuation=1/(1+dist*1.7f);
    a=(a+echo*(.04f+dist*.12f))*attenuation;
-   b=(b+history[(cursor+std::min(1000,taps*3))&historyMask]*(.04f+dist*.12f))*attenuation;
+   b=(b+history[(cursor-std::min(1000,taps*3)+historySize)&historyMask]*(.04f+dist*.12f))*attenuation;
    l+=(a-l)*wet;r+=(b-r)*wet;
   }
-  cursor=(cursor-1+historySize)&historyMask;
+  cursor=(cursor+1)&historyMask;
  }
 };

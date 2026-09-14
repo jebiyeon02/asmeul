@@ -5,8 +5,13 @@ import SwiftUI
   @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
   var body: some Scene {
     Window("아스믈", id: "main") {
-      ContentView(model: delegate.model).frame(width: 1080, height: 720).preferredColorScheme(.dark)
-    }.windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
+      ContentView(model: delegate.model).preferredColorScheme(.dark)
+    // Keep the native titlebar controls available.  The title itself is hidden
+    // after the window is attached, so the app keeps its edge-to-edge layout
+    // while the red/yellow/green controls and native fullscreen action remain.
+    }
+    .defaultSize(width: 1080, height: 720)
+    .windowStyle(.titleBar)
     Settings {
       SettingsView(model: delegate.model)
         .frame(width: 460, height: 300)
@@ -24,6 +29,119 @@ import SwiftUI
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+@MainActor final class FocusWindowCoordinator: NSObject, ObservableObject {
+  private weak var window: NSWindow?
+  private weak var model: AudioModel?
+  private var isTransitioning = false
+  private var notificationTokens: [NSObjectProtocol] = []
+  private var escapeMonitor: Any?
+
+  func attach(window: NSWindow, model: AudioModel) {
+    guard self.window !== window else {
+      synchronize()
+      return
+    }
+
+    self.window = window
+    self.model = model
+    configureWindowChrome(window)
+    installEscapeMonitor()
+    window.collectionBehavior.insert(.fullScreenPrimary)
+
+    notificationTokens.forEach(NotificationCenter.default.removeObserver)
+    notificationTokens = [
+      NotificationCenter.default.addObserver(
+        forName: NSWindow.didEnterFullScreenNotification,
+        object: window,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in
+          self?.isTransitioning = false
+          // The user can enter fullscreen from the native green traffic light
+          // or Window menu as well as from the in-app 몰입 button.
+          if self?.model?.focusMode == false {
+            self?.model?.focusMode = true
+          }
+          self?.synchronize()
+        }
+      },
+      NotificationCenter.default.addObserver(
+        forName: NSWindow.didExitFullScreenNotification,
+        object: window,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in
+          self?.isTransitioning = false
+          if self?.model?.focusMode == true {
+            self?.model?.focusMode = false
+          }
+          self?.synchronize()
+        }
+      },
+    ]
+
+    synchronize()
+  }
+
+  private func configureWindowChrome(_ window: NSWindow) {
+    // SwiftUI's hiddenTitleBar style removes these controls entirely. Keep the
+    // titlebar transparent and title-less, but restore the standard controls.
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    // Do not make the entire content view a window drag target. That setting
+    // competes with ScrollView's pan gesture and makes dragging the sound list
+    // move the app window instead of scrolling it.
+    window.isMovableByWindowBackground = false
+    window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
+    window.standardWindowButton(.closeButton)?.isHidden = false
+    window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+    window.standardWindowButton(.zoomButton)?.isHidden = false
+    window.standardWindowButton(.zoomButton)?.isEnabled = true
+  }
+
+  private func installEscapeMonitor() {
+    guard escapeMonitor == nil else { return }
+    escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard event.keyCode == 53, self?.model?.focusMode == true else { return event }
+      self?.model?.toggleFocusMode()
+      return nil
+    }
+  }
+
+  func setFocus(_ focused: Bool) {
+    guard model != nil else { return }
+    synchronize()
+  }
+
+  private func synchronize() {
+    guard let window, let model else { return }
+    let shouldBeFullscreen = model.focusMode
+    let isFullscreen = window.styleMask.contains(.fullScreen)
+    guard shouldBeFullscreen != isFullscreen, !isTransitioning else { return }
+
+    isTransitioning = true
+    DispatchQueue.main.async { [weak self, weak window] in
+      guard let self, let window, let model = self.model else { return }
+      guard model.focusMode == shouldBeFullscreen else {
+        self.isTransitioning = false
+        self.synchronize()
+        return
+      }
+
+      if window.styleMask.contains(.fullScreen) != shouldBeFullscreen {
+        window.toggleFullScreen(nil)
+      } else {
+        self.isTransitioning = false
+      }
+    }
+  }
+
+  deinit {
+    notificationTokens.forEach(NotificationCenter.default.removeObserver)
+    if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+  }
+}
+
 let ink = Color(red: 0.035, green: 0.04, blue: 0.055)
 let accent = Color(red: 0.93, green: 0.79, blue: 0.55)
 let muted = Color.white.opacity(0.52)
@@ -32,39 +150,64 @@ let directions = ["앞", "왼쪽 앞", "오른쪽 앞", "왼쪽 뒤", "오른쪽
 
 struct ContentView: View {
   @ObservedObject var model: AudioModel
+  @StateObject private var windowCoordinator = FocusWindowCoordinator()
+  @State private var windowVisible = true
   var body: some View {
     ZStack {
-      AmbientFog(
-        theme: model.theme,
-        activeTrackIDs: model.activeTrackIDs,
-        animationsEnabled: model.animationsEnabled)
-      GeometryReader { proxy in
-        let availableHeight = max(0, proxy.size.height - 36)
-        let scrollHeight = max(180, availableHeight - 58 - 58 - 36)
-        HStack(spacing: 22) {
-          Sidebar(model: model).frame(height: availableHeight)
-          VStack(spacing: 18) {
-            header
-            ScrollView {
-              LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
-              ) {
-                ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
-              }.padding(.vertical, 2)
+      if model.focusMode {
+        FocusEnvironment(model: model)
+          .transition(.opacity.combined(with: .scale(scale: 1.015)))
+          .zIndex(2)
+      } else {
+        ZStack {
+          AmbientFog(
+            theme: model.theme,
+            activeTrackIDs: model.activeTrackIDs,
+            animationsEnabled: model.animationsEnabled,
+            isPlaying: model.running)
+          GeometryReader { proxy in
+            let availableHeight = max(0, proxy.size.height - 36)
+            let scrollHeight = max(180, availableHeight - 58 - 58 - 36)
+            HStack(spacing: 22) {
+              Sidebar(model: model).frame(height: availableHeight)
+              VStack(spacing: 18) {
+                header
+                ScrollView {
+                  LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    spacing: 12
+                  ) {
+                    ForEach(model.catalog) { track in TrackCard(model: model, track: track) }
+                  }.padding(.vertical, 2)
+                }
+                .scrollIndicators(.hidden)
+                .frame(height: scrollHeight)
+                BottomBar(model: model)
+              }
+              .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
             }
-            .scrollIndicators(.hidden)
-            .frame(height: scrollHeight)
-            BottomBar(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(18)
           }
-          .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(18)
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+        .zIndex(1)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(ink)
+    .environment(\.motionVisible, windowVisible)
+    .animation(.easeInOut(duration: 0.35), value: model.focusMode)
+    .background(
+      WindowAccessor(
+        onResolve: { window in windowCoordinator.attach(window: window, model: model) },
+        onVisibilityChange: { visible in
+          if windowVisible != visible { windowVisible = visible }
+        })
+    )
+    .onChange(of: model.focusMode) { _, focused in
+      windowCoordinator.setFocus(focused)
+    }
     .onDisappear { model.rememberMood() }
   }
 
@@ -109,6 +252,15 @@ struct ContentView: View {
         Label("MP3 추가", systemImage: "plus").font(.system(size: 11, weight: .medium))
           .padding(.horizontal, 14).padding(.vertical, 9)
       }.buttonStyle(GlassButtonStyle())
+      Button {
+        model.toggleFocusMode()
+      } label: {
+        Label("몰입", systemImage: "viewfinder")
+          .font(.system(size: 11, weight: .medium))
+          .padding(.horizontal, 13).padding(.vertical, 9)
+      }
+      .buttonStyle(GlassButtonStyle())
+      .accessibilityIdentifier("focus-mode")
       Button {
         model.toggle()
       } label: {
@@ -158,7 +310,9 @@ struct SettingsView: View {
         Divider().overlay(hairline)
         Label(
           model.animationsEnabled
-            ? "현재 30fps로 부드러운 앰비언트 모션을 렌더링합니다."
+            ? (model.running
+              ? "재생 중 가벼운 앰비언트 모션을 렌더링합니다."
+              : "중지 상태에서는 현재 화면을 유지하고, 재생 시 다시 움직입니다.")
             : "애니메이션을 끄면 배경 업데이트와 파티클 렌더링을 중지합니다.",
           systemImage: model.animationsEnabled ? "waveform.path.ecg" : "pause.circle"
         )
@@ -201,6 +355,12 @@ struct Sidebar: View {
       Divider().overlay(hairline).padding(.vertical, 23)
       Text("음악 효과").font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
         .padding(.bottom, 19)
+      if model.music < 0.001 {
+        Text("ASMR만 모드에서는 음악 효과가 들리지 않습니다")
+          .font(.system(size: 8)).foregroundStyle(.orange.opacity(0.9))
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.bottom, 2)
+      }
       CompactSlider(title: "Space", value: $model.space)
       CompactSlider(title: "Warmth", value: $model.warmth)
       CompactSlider(title: "Orbit", value: $model.orbit)
@@ -226,6 +386,12 @@ struct Sidebar: View {
         .menuStyle(.borderlessButton)
         .accessibilityLabel("배경 무드")
       }
+      Divider().overlay(hairline).padding(.vertical, 18)
+      HStack(spacing: 8) {
+        Text("환경").font(.system(size: 10, weight: .medium)).foregroundStyle(muted)
+        Spacer()
+        EnvironmentMenu(model: model)
+      }
       Spacer()
       Divider().overlay(hairline).padding(.bottom, 22)
       Text("AUDIO SOURCE").font(.system(size: 8, weight: .medium)).tracking(1.7)
@@ -234,6 +400,12 @@ struct Sidebar: View {
         Text("전체 시스템").tag(UInt32(0))
         ForEach(model.processes) { Text($0.name).tag($0.id) }
       }.labelsHidden().controlSize(.small)
+      if model.waitingForMusic {
+        Text("음악 입력 대기 중 · 원음 유지")
+          .font(.system(size: 9)).foregroundStyle(.orange)
+          .padding(.top, 8)
+          .help("음악이 재생 중인데 효과가 들리지 않으면 시스템 설정 → 개인정보 보호 및 보안 → 화면 및 시스템 오디오 녹음에서 아스믈의 오디오 접근을 허용한 뒤 다시 시작하세요.")
+      }
       Label(model.outputName, systemImage: "headphones")
         .font(.system(size: 9)).foregroundStyle(muted).lineLimit(1).padding(.top, 12)
       Text("ASMEUL 0.9").font(.system(size: 7, weight: .medium)).tracking(1.5)
@@ -274,12 +446,17 @@ struct CompactSlider: View {
 
 struct TrackCard: View {
   @ObservedObject var model: AudioModel
+  @Environment(\.motionVisible) private var visible
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let track: ASMRTrack
+  @State private var isRenaming = false
+  @State private var renameDraft = ""
   var setting: TrackSetting {
     model.tracks.first(where: { $0.id == track.id }) ?? TrackSetting(id: track.id)
   }
   var duration: String {
-    let seconds = Int(model.durations[track.id] ?? 0)
+    guard let value = model.durations[track.id] else { return "--:--" }
+    let seconds = Int(value)
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
   }
   var body: some View {
@@ -291,8 +468,8 @@ struct TrackCard: View {
           Image(systemName: track.symbol).font(.system(size: 19, weight: .light)).frame(width: 24)
           Text(track.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
           Spacer()
-          Text(duration).font(.system(size: 8, design: .monospaced)).foregroundStyle(muted)
-          if model.animationsEnabled {
+          Text(model.loadingTracks.contains(track.id) ? "준비 중" : duration).font(.system(size: 8, design: .monospaced)).foregroundStyle(muted)
+          if model.animationsEnabled && model.running && setting.enabled && visible && !reduceMotion {
             Image(systemName: setting.enabled ? "wave.3.right.circle.fill" : "circle")
               .font(.system(size: 18, weight: .light))
               .symbolEffect(.pulse.byLayer, options: .repeating, value: setting.enabled)
@@ -341,11 +518,38 @@ struct TrackCard: View {
       .glass(cornerRadius: 13, active: setting.enabled)
       .contextMenu {
         if track.custom {
+          Button("이름 변경") {
+            renameDraft = track.name
+            isRenaming = true
+          }
           Button("음원 삭제", role: .destructive) {
             model.removeCustomSound(track.id)
           }
         }
       }
+      .alert("음원 이름 변경", isPresented: $isRenaming) {
+        TextField("이름", text: $renameDraft)
+        Button("취소", role: .cancel) {}
+        Button("저장") {
+          model.renameCustomSound(track.id, name: renameDraft)
+        }
+      } message: {
+        Text("사용자 음원에 표시할 이름을 입력하세요.")
+      }
+  }
+}
+
+private struct OutputLevelMeter: View {
+  @ObservedObject var meter: AudioMeter
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(0..<8, id: \.self) { i in
+        Capsule().fill(i < meter.litBars ? accent : Color.white.opacity(0.08))
+          .frame(width: 3, height: 8)
+      }
+    }
+    .frame(width: 52, alignment: .leading)
+    .accessibilityLabel("출력 레벨")
   }
 }
 
@@ -373,13 +577,7 @@ struct BottomBar: View {
         Text(error).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(1)
           .layoutPriority(1)
       } else {
-        HStack(spacing: 4) {
-          ForEach(0..<8, id: \.self) { i in
-            Capsule().fill(Double(model.peak) > Double(i) / 10 ? accent : Color.white.opacity(0.08))
-              .frame(width: 3, height: 8)
-          }
-        }
-        .frame(width: 52, alignment: .leading)
+        OutputLevelMeter(meter: model.meter)
       }
 
       Spacer(minLength: 8)
@@ -420,7 +618,7 @@ struct BottomBar: View {
 
       Divider().frame(height: 24).overlay(hairline)
 
-      Button(model.bypass ? "믹스로 돌아가기" : "A/B 원음 비교") { model.bypass.toggle() }
+      Button(model.bypass ? "믹스로 돌아가기" : "원음 듣기") { model.bypass.toggle() }
         .buttonStyle(.plain)
         .font(.system(size: 9, weight: .medium))
         .foregroundStyle(accent)
@@ -437,30 +635,20 @@ struct AmbientFog: View {
   let theme: AmbientTheme
   let activeTrackIDs: Set<Int>
   let animationsEnabled: Bool
+  let isPlaying: Bool
 
-  private static let timelineStart = Date()
-
-  @ViewBuilder
   var body: some View {
-    Group {
-      if animationsEnabled {
-        // A fixed periodic schedule keeps the field moving reliably. Only this single
-        // background layer is scheduled; cards stay static.
-        TimelineView(.periodic(from: Self.timelineStart, by: 1.0 / 30.0)) { timeline in
-          AmbientFogFrame(
-            time: timeline.date.timeIntervalSinceReferenceDate,
-            theme: theme,
-            activeTrackIDs: activeTrackIDs,
-            animationsEnabled: true)
-        }
-      } else {
-        // Do not schedule a timeline when the user disables motion. The static mesh
-        // remains visible while Canvas and its display-link updates are removed.
+    ZStack {
+      // The broad, slow lights do not need the particle refresh rate.
+      MotionTimeline(isRunning: animationsEnabled && isPlaying, framesPerSecond: 15) { time in
         AmbientFogFrame(
-          time: 0,
-          theme: theme,
-          activeTrackIDs: activeTrackIDs,
-          animationsEnabled: false)
+          time: animationsEnabled ? time : 0, theme: theme,
+          activeTrackIDs: activeTrackIDs)
+      }
+      if animationsEnabled {
+        MotionTimeline(isRunning: isPlaying) { time in
+          AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
+        }
       }
     }
     .ignoresSafeArea()
@@ -472,7 +660,6 @@ private struct AmbientFogFrame: View {
   let time: TimeInterval
   let theme: AmbientTheme
   let activeTrackIDs: Set<Int>
-  let animationsEnabled: Bool
 
   var body: some View {
     GeometryReader { proxy in
@@ -497,9 +684,6 @@ private struct AmbientFogFrame: View {
           y: -proxy.size.height * 0.3 + sin(time * 0.17) * 85, pulse: 0.27
         )
         .blendMode(.screen)
-        if animationsEnabled {
-          AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
-        }
       }
     }
   }
@@ -559,6 +743,7 @@ private struct AmbientFogFrame: View {
 
   private var primaryLight: Color {
     if fireActive { return .orange }
+    if snowActive { return .white }
     if rainActive { return .blue }
     if waveActive { return .cyan }
     if windActive { return .mint }
@@ -577,6 +762,7 @@ private struct AmbientFogFrame: View {
 
   private var secondaryLight: Color {
     if fireActive { return .red }
+    if snowActive { return .cyan }
     if rainActive { return .cyan }
     if waveActive { return .blue }
     if windActive { return .cyan }
@@ -595,6 +781,7 @@ private struct AmbientFogFrame: View {
 
   private var warmLight: Color {
     if fireActive { return .yellow }
+    if snowActive { return .blue }
     if rainActive { return .indigo }
     if waveActive { return .mint }
     if windActive { return .white }
@@ -639,6 +826,8 @@ private struct AmbientFogFrame: View {
     activeTrackIDs.contains(18) || activeTrackIDs.contains(19)
   }
 
+  private var snowActive: Bool { activeTrackIDs.contains(32) }
+
   private var waveActive: Bool {
     activeTrackIDs.contains(10) || activeTrackIDs.contains(14) || activeTrackIDs.contains(15)
   }
@@ -667,10 +856,11 @@ private struct AmbientParticles: View {
   let activeTrackIDs: Set<Int>
 
   var body: some View {
-    Canvas(opaque: false, colorMode: .extendedLinear, rendersAsynchronously: true) {
+    Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) {
       context, size in
-      let t = time.truncatingRemainder(dividingBy: 600)
+      let t = time
       if rainActive { drawRain(&context, size: size, time: t) }
+      if snowActive { drawSnow(&context, size: size, time: t) }
       if waveActive { drawWaves(&context, size: size, time: t) }
       if windActive { drawWind(&context, size: size, time: t) }
       if fireflyActive { drawFireflies(&context, size: size, time: t) }
@@ -702,6 +892,32 @@ private struct AmbientParticles: View {
       path.move(to: CGPoint(x: x, y: y))
       path.addLine(to: CGPoint(x: x - 3.5, y: y + length))
       context.stroke(path, with: .color(Color.white.opacity(alpha)), lineWidth: 0.7)
+    }
+  }
+
+  private func drawSnow(_ context: inout GraphicsContext, size: CGSize, time: Double) {
+    for index in 0..<58 {
+      let seed = Double(index)
+      let fallSpeed = 0.022 + fraction(seed * 0.17) * 0.024
+      let cycle = fraction(seed * 0.137 + time * fallSpeed)
+      let baseX = fraction(seed * 0.61803398875 + 0.09)
+      let drift = sin(time * (0.18 + fraction(seed * 0.13) * 0.12) + seed * 1.7) * (10 + fraction(seed * 0.31) * 18)
+      let x = baseX * size.width + drift
+      let y = cycle * (size.height + 90) - 45
+      let radius = 1.1 + fraction(seed * 0.47) * 2.5
+      let alpha = 0.12 + fraction(seed * 0.23) * 0.2
+      let core = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
+      context.fill(Path(ellipseIn: core), with: .color(Color.white.opacity(alpha)))
+
+      if index % 5 == 0 {
+        let arm = radius * 2.8
+        var flake = Path()
+        flake.move(to: CGPoint(x: x - arm, y: y))
+        flake.addLine(to: CGPoint(x: x + arm, y: y))
+        flake.move(to: CGPoint(x: x, y: y - arm))
+        flake.addLine(to: CGPoint(x: x, y: y + arm))
+        context.stroke(flake, with: .color(Color.cyan.opacity(alpha * 0.7)), lineWidth: 0.6)
+      }
     }
   }
 
@@ -910,6 +1126,8 @@ private struct AmbientParticles: View {
     activeTrackIDs.contains(18) || activeTrackIDs.contains(19)
   }
 
+  private var snowActive: Bool { activeTrackIDs.contains(32) }
+
   private var waveActive: Bool {
     activeTrackIDs.contains(10) || activeTrackIDs.contains(14) || activeTrackIDs.contains(15)
   }
@@ -930,9 +1148,426 @@ private struct AmbientParticles: View {
   private var pencilActive: Bool { activeTrackIDs.contains(5) || activeTrackIDs.contains(6) }
   private var cityActive: Bool { activeTrackIDs.contains(12) }
   private var chimesActive: Bool { activeTrackIDs.contains(13) }
-  private var customActive: Bool { activeTrackIDs.contains { $0 >= 21 } }
+  private var customActive: Bool { activeTrackIDs.contains { (21..<32).contains($0) } }
 
   private func fraction(_ value: Double) -> Double { value - floor(value) }
+}
+
+struct EnvironmentMenu: View {
+  @ObservedObject var model: AudioModel
+  var compact = false
+
+  var body: some View {
+    Menu {
+      ForEach(EnvironmentPhoto.library) { option in
+        Button {
+          model.selectEnvironment(option.id)
+        } label: {
+          Label(
+            option.title,
+            systemImage: option.id == model.environmentID
+              ? "checkmark.circle.fill" : "photo")
+        }
+      }
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: compact ? "photo.on.rectangle" : "photo")
+          .font(.system(size: compact ? 11 : 10, weight: .medium))
+        Text(model.selectedEnvironment.title)
+          .font(.system(size: compact ? 9 : 10, weight: .medium))
+          .lineLimit(1)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.system(size: 7, weight: .bold))
+      }
+      .foregroundStyle(compact ? Color.white.opacity(0.72) : Color.white.opacity(0.82))
+      .padding(.horizontal, compact ? 10 : 0)
+      .padding(.vertical, compact ? 7 : 4)
+      .background(
+        compact ? Color.black.opacity(0.18) : Color.clear,
+        in: Capsule())
+    }
+    .menuStyle(.borderlessButton)
+    .accessibilityLabel("몰입 환경")
+  }
+}
+
+struct EnvironmentThumbnail: View {
+  let photo: EnvironmentPhoto
+  let selected: Bool
+  let width: CGFloat
+  let height: CGFloat
+  let showLabels: Bool
+  @State private var image: CGImage?
+
+  init(
+    photo: EnvironmentPhoto,
+    selected: Bool,
+    width: CGFloat = 112,
+    height: CGFloat = 58,
+    showLabels: Bool = true
+  ) {
+    self.photo = photo
+    self.selected = selected
+    self.width = width
+    self.height = height
+    self.showLabels = showLabels
+  }
+
+  var body: some View {
+    ZStack(alignment: .bottomLeading) {
+      photoImage
+        .frame(width: width, height: height)
+        .clipped()
+      LinearGradient(
+        colors: [.clear, Color.black.opacity(0.78)],
+        startPoint: .top,
+        endPoint: .bottom)
+      if showLabels {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(photo.title)
+            .font(.system(size: 9, weight: .medium))
+            .lineLimit(1)
+          Text(photo.subtitle)
+            .font(.system(size: 6, weight: .medium))
+            .tracking(1.1)
+            .foregroundStyle(Color.white.opacity(0.6))
+        }
+        .foregroundStyle(Color.white.opacity(0.9))
+        .padding(.horizontal, 9)
+        .padding(.bottom, 7)
+      }
+    }
+    .frame(width: width, height: height)
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(selected ? accent : Color.white.opacity(0.12), lineWidth: selected ? 1.5 : 0.7))
+    .shadow(color: selected ? accent.opacity(0.22) : .clear, radius: 8)
+    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(photo.title)
+    .accessibilityValue(selected ? "선택됨" : "선택 안 됨")
+    .task(id: photo.fileName) {
+      guard let url = Bundle.module.url(forResource: photo.fileName, withExtension: nil) else { return }
+      let decoded = await EnvironmentImageStore.shared.image(at: url, maxPixelSize: 512)
+      guard !Task.isCancelled else { return }
+      image = decoded
+    }
+  }
+
+  @ViewBuilder private var photoImage: some View {
+    if let image {
+      Image(decorative: image, scale: 1)
+        .resizable()
+        .scaledToFill()
+    } else {
+      Color.white.opacity(0.06)
+    }
+  }
+}
+
+struct FocusEnvironment: View {
+  @ObservedObject var model: AudioModel
+  @State private var dockExpanded = false
+
+  var body: some View {
+    ZStack {
+      CinematicEnvironment(
+        theme: model.theme,
+        photo: model.selectedEnvironment,
+        activeTrackIDs: model.activeTrackIDs,
+        animationsEnabled: model.animationsEnabled,
+        isPlaying: model.running)
+
+      VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          Spacer()
+          Text(Date(), style: .time)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .tracking(2.5)
+            .foregroundStyle(Color.white.opacity(0.58))
+            .shadow(color: .black.opacity(0.35), radius: 8)
+
+          Button {
+            model.toggleFocusMode()
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(Color.white.opacity(0.76))
+              .frame(width: 30, height: 30)
+              .background(Color.black.opacity(0.18), in: Circle())
+              .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("exit-focus-mode")
+          .accessibilityLabel("몰입 모드 나가기")
+        }
+        Spacer()
+      }
+      .padding(.horizontal, 30)
+      .padding(.top, 24)
+
+      VStack(spacing: 0) {
+        Spacer()
+        FocusDock(model: model, isExpanded: $dockExpanded)
+          .padding(.bottom, 18)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .onChange(of: model.focusMode) { _, focused in
+      if !focused { dockExpanded = false }
+    }
+    .onExitCommand {
+      // Escape is the familiar exit affordance while the immersive view owns
+      // the whole window. Leave normal window navigation untouched.
+      if model.focusMode { model.toggleFocusMode() }
+    }
+  }
+}
+
+private struct CinematicEnvironment: View {
+  let theme: AmbientTheme
+  let photo: EnvironmentPhoto
+  let activeTrackIDs: Set<Int>
+  let animationsEnabled: Bool
+  let isPlaying: Bool
+
+  var body: some View {
+    ZStack {
+      FocusPhotoBackground(photo: photo, isAnimating: animationsEnabled && isPlaying)
+      if animationsEnabled && !activeTrackIDs.isEmpty {
+        MotionTimeline(isRunning: isPlaying) { time in
+          AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
+        }
+      }
+    }
+    .ignoresSafeArea()
+    .allowsHitTesting(false)
+  }
+}
+
+private struct FocusPhotoBackground: View {
+  let photo: EnvironmentPhoto
+  let isAnimating: Bool
+  @Environment(\.displayScale) private var displayScale
+  @Environment(\.motionVisible) private var visible
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var image: CGImage?
+
+  var body: some View {
+    GeometryReader { proxy in
+      // Bucket resize requests and cap decoded textures, including on large Retina displays.
+      let pixels = min(4096, max(512, Int(ceil(max(proxy.size.width, proxy.size.height) * displayScale * 1.06 / 512)) * 512))
+      ZStack {
+        Color.black
+        if let image {
+          CompositedPhoto(image: image, isAnimating: isAnimating && visible && !reduceMotion)
+        }
+        LinearGradient(
+          colors: [Color.black.opacity(0.22), Color.black.opacity(0.08), Color.black.opacity(0.46)],
+          startPoint: .top, endPoint: .bottom)
+        RadialGradient(
+          colors: [.clear, Color.black.opacity(0.22)], center: .center,
+          startRadius: min(proxy.size.width, proxy.size.height) * 0.18,
+          endRadius: max(proxy.size.width, proxy.size.height) * 0.78)
+        Color.black.opacity(0.3)
+      }
+      .clipped()
+      .task(id: "\(photo.fileName):\(pixels)") {
+        guard let url = Bundle.module.url(forResource: photo.fileName, withExtension: nil) else { return }
+        let decoded = await EnvironmentImageStore.shared.image(at: url, maxPixelSize: pixels)
+        guard !Task.isCancelled else { return }
+        image = decoded
+      }
+    }
+  }
+}
+
+struct FocusDock: View {
+  @ObservedObject var model: AudioModel
+  @Binding var isExpanded: Bool
+  @State private var isPinned = false
+
+  private let dockWidth: CGFloat = 660
+  private let collapsedHeight: CGFloat = 78
+  private let expandedHeight: CGFloat = 176
+  private let dockBarHeight: CGFloat = 72
+
+  private var activeTracks: [ASMRTrack] {
+    model.catalog.filter { track in
+      model.tracks.first(where: { $0.id == track.id })?.enabled == true
+    }
+  }
+
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      if isExpanded {
+        FocusDockDetails(model: model, tracks: activeTracks)
+          .frame(width: dockWidth, height: 78, alignment: .topLeading)
+          .padding(.bottom, dockBarHeight)
+          .transition(
+            .asymmetric(
+              insertion: .opacity.combined(with: .offset(y: 12)),
+              removal: .opacity.combined(with: .offset(y: 10))))
+      }
+
+      dockBar
+    }
+    .frame(width: dockWidth, height: isExpanded ? expandedHeight : collapsedHeight, alignment: .bottom)
+    .glass(cornerRadius: 38)
+    .accessibilityIdentifier("focus-dock")
+    .onHover { hovering in
+      withAnimation(.spring(response: 0.46, dampingFraction: 0.88)) {
+        if hovering {
+          isExpanded = true
+        } else if !isPinned {
+          isExpanded = false
+        }
+      }
+    }
+    .animation(.spring(response: 0.46, dampingFraction: 0.88), value: isExpanded)
+  }
+
+  private var dockBar: some View {
+    HStack(spacing: 0) {
+      HStack(spacing: 15) {
+        if activeTracks.isEmpty {
+          Image(systemName: "waveform")
+            .font(.system(size: 16, weight: .light))
+            .foregroundStyle(Color.white.opacity(0.68))
+        } else {
+          ForEach(Array(activeTracks.prefix(4))) { track in
+            Image(systemName: track.symbol)
+              .font(.system(size: 17, weight: .light))
+              .foregroundStyle(Color.white.opacity(0.8))
+              .help(track.name)
+          }
+        }
+      }
+      .frame(width: 180, alignment: .leading)
+
+      Spacer(minLength: 12)
+
+      Button {
+        model.toggle()
+      } label: {
+        Image(systemName: model.running ? "pause.fill" : "play.fill")
+          .font(.system(size: 18, weight: .semibold))
+          .frame(width: 58, height: 58)
+          .background(
+            model.running ? accent.opacity(0.25) : Color.white.opacity(0.06),
+            in: Circle())
+          .overlay(Circle().stroke(accent.opacity(0.78), lineWidth: 1.2))
+          .foregroundStyle(model.running ? accent : Color.white.opacity(0.84))
+          .shadow(color: accent.opacity(model.running ? 0.42 : 0.12), radius: 14)
+      }
+      .buttonStyle(.plain)
+      .disabled(!model.assetsReady)
+      .accessibilityIdentifier("focus-dock-power")
+
+      Spacer(minLength: 12)
+
+      HStack(spacing: 10) {
+        Image(systemName: "speaker.wave.2.fill")
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(Color.white.opacity(0.76))
+        Slider(value: $model.gain, in: 0...1)
+          .frame(width: 88)
+          .tint(accent)
+          .accessibilityLabel("몰입 모드 출력 볼륨")
+      }
+      .frame(width: 142, alignment: .trailing)
+
+      Divider()
+        .frame(height: 28)
+        .overlay(Color.white.opacity(0.18))
+        .padding(.horizontal, 15)
+
+      Button {
+        withAnimation(.spring(response: 0.46, dampingFraction: 0.88)) {
+          if isExpanded {
+            isPinned = false
+            isExpanded = false
+          } else {
+            isPinned = true
+            isExpanded = true
+          }
+        }
+      } label: {
+        Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(Color.white.opacity(0.68))
+          .frame(width: 26, height: 30)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(isExpanded ? "믹스 목록 접기" : "믹스 목록 펼치기")
+    }
+    .padding(.horizontal, 24)
+    .frame(width: dockWidth, height: dockBarHeight)
+  }
+}
+
+private struct FocusDockDetails: View {
+  @ObservedObject var model: AudioModel
+  let tracks: [ASMRTrack]
+
+  var body: some View {
+    HStack(spacing: 12) {
+      HStack(spacing: 8) {
+        ForEach(EnvironmentPhoto.library) { photo in
+          Button {
+            model.selectEnvironment(photo.id)
+          } label: {
+            EnvironmentThumbnail(
+              photo: photo,
+              selected: model.environmentID == photo.id,
+              width: 80,
+              height: 48,
+              showLabels: false)
+          }
+          .buttonStyle(.plain)
+          .help(photo.title)
+          .accessibilityIdentifier("environment-\(photo.id)")
+        }
+      }
+
+      Divider()
+        .frame(height: 48)
+        .overlay(Color.white.opacity(0.18))
+
+      if tracks.isEmpty {
+        Image(systemName: "waveform")
+          .font(.system(size: 16, weight: .light))
+          .foregroundStyle(Color.white.opacity(0.45))
+          .frame(width: 42)
+          .help("믹서에서 사운드를 선택하세요")
+      } else {
+        HStack(spacing: 8) {
+          ForEach(Array(tracks.prefix(3))) { track in
+            VStack(spacing: 5) {
+              Image(systemName: track.symbol)
+                .font(.system(size: 12, weight: .light))
+                .foregroundStyle(accent)
+              Slider(
+                value: Binding(
+                  get: { model.tracks.first(where: { $0.id == track.id })?.volume ?? 0 },
+                  set: { model.setTrackVolume(track.id, $0) }),
+                in: 0...1)
+                .tint(accent)
+                .frame(width: 42)
+                .accessibilityLabel("\(track.name) 음량")
+            }
+            .frame(width: 44)
+            .help(track.name)
+          }
+        }
+      }
+    }
+    .padding(.horizontal, 18)
+    .padding(.top, 11)
+    .padding(.bottom, 7)
+  }
 }
 
 struct AdaptiveGlassContainer<Content: View>: View {
@@ -1006,6 +1641,9 @@ struct GoldButtonStyle: ButtonStyle {
 struct MenuPanel: View {
   @ObservedObject var model: AudioModel
   @Environment(\.openWindow) private var openWindow
+  @State private var isRenaming = false
+  @State private var renameDraft = ""
+  @State private var renameTrackID: Int?
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
@@ -1033,6 +1671,11 @@ struct MenuPanel: View {
             }
             .contextMenu {
               if track.custom {
+                Button("이름 변경") {
+                  renameDraft = track.name
+                  renameTrackID = track.id
+                  isRenaming = true
+                }
                 Button("음원 삭제", role: .destructive) {
                   model.removeCustomSound(track.id)
                 }
@@ -1042,17 +1685,27 @@ struct MenuPanel: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
       }.frame(height: 250)
       HStack {
-        Button("MP3 추가") { model.importSound() }
         Spacer()
-        SettingsLink {
-          Image(systemName: "gearshape")
-        }
-        .accessibilityLabel("설정")
         Button("아스믈 열기") {
           openWindow(id: "main")
           NSApp.activate(ignoringOtherApps: true)
         }
       }.font(.caption)
-    }.padding(22).frame(width: 310).background(ink)
+    }
+    .padding(22)
+    .frame(width: 310)
+    .background(ink)
+    .alert("음원 이름 변경", isPresented: $isRenaming) {
+      TextField("이름", text: $renameDraft)
+      Button("취소", role: .cancel) { renameTrackID = nil }
+      Button("저장") {
+        if let renameTrackID {
+          model.renameCustomSound(renameTrackID, name: renameDraft)
+        }
+        self.renameTrackID = nil
+      }
+    } message: {
+      Text("사용자 음원에 표시할 이름을 입력하세요.")
+    }
   }
 }

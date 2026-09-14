@@ -40,5 +40,9 @@ ditto -c -k --norsrc --keepParent "$APP" "$PWD/ASMEUL-macOS-arm64.zip"
 rm -rf "$PWD/build/ASMEUL.app"
 ditto --norsrc "$APP" "$PWD/build/ASMEUL.app"
 xattr -cr "$PWD/build/ASMEUL.app"
+# macOS may reattach the provenance attribute while ditto copies the app into
+# the workspace. It is metadata, not part of the signed bundle, and codesign
+# rejects it as a resource fork on subsequent rebuilds.
+xattr -dr com.apple.provenance "$PWD/build/ASMEUL.app" 2>/dev/null || true
 codesign --verify --deep --strict "$PWD/build/ASMEUL.app"
 printf '%s\n' "$PWD/build/ASMEUL.app"

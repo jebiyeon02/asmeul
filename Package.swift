@@ -8,9 +8,10 @@ let package = Package(
     .target(
       name: "AudioCore", publicHeadersPath: "include",
       cxxSettings: [.unsafeFlags(["-std=c++17", "-fobjc-arc"])],
-      linkerSettings: [.linkedFramework("CoreAudio"), .linkedFramework("Foundation")]),
+      linkerSettings: [.linkedFramework("CoreAudio"), .linkedFramework("Foundation"), .linkedFramework("Accelerate")]),
     .executableTarget(
       name: "Hollow", dependencies: ["AudioCore"],
+      path: "Sources/ASMEUL",
       resources: [.process("Resources")],
       linkerSettings: [
         .linkedFramework("SwiftUI"), .linkedFramework("AppKit"), .linkedFramework("Carbon"),

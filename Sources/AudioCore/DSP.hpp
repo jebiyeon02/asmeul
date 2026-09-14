@@ -41,10 +41,14 @@ public:
         toneL+=alpha*(left-toneL); toneR+=alpha*(right-toneR);
         // At zero warmth the signal stays transparent. Increasing warmth adds
         // a darker low-pass tone and gently saturates peaks.
-        float drive=1+warm*4;
         float l=left+(toneL-left)*warm, r=right+(toneR-right)*warm;
-        l=l+(std::tanh(l*drive)/drive*1.4f-l)*warm;
-        r=r+(std::tanh(r*drive)/drive*1.4f-r)*warm;
+        // At the transparent setting the saturation term is multiplied by
+        // zero. Avoid its transcendental work without changing that setting.
+        if(warm>0){
+            float drive=1+warm*4;
+            l=l+(std::tanh(l*drive)/drive*1.4f-l)*warm;
+            r=r+(std::tanh(r*drive)/drive*1.4f-r)*warm;
+        }
         std::array<float,8> taps{};
         float sum=0,revL=0,revR=0;
         for(int i=0;i<8;i++) {
@@ -68,11 +72,15 @@ public:
         r=r*(1-amount*.85f)+revR*amount*1.5f;
         phase+=6.28318530718*(.035+motion*.145)/rate;
         if(phase>6.28318530718)phase-=6.28318530718;
-        float depth=std::sqrt(std::max(0.f,motion));
-        float pan=std::sin(phase)*depth*.985f;
-        // Move the stereo image, including hard-panned sources, across the field.
-        float mid=(l+r)*.5f, side=(l-r)*.5f*(1-depth*.85f);
-        l=(mid+side)*std::sqrt(1-pan);r=(mid-side)*std::sqrt(1+pan);
+        // Keep phase advancing while the effect is at its transparent default,
+        // but skip the orbit math until the user actually enables it.
+        if(motion>0){
+            float depth=std::sqrt(motion);
+            float pan=std::sin(phase)*depth*.985f;
+            // Move the stereo image, including hard-panned sources, across the field.
+            float mid=(l+r)*.5f, side=(l-r)*.5f*(1-depth*.85f);
+            l=(mid+side)*std::sqrt(1-pan);r=(mid-side)*std::sqrt(1+pan);
+        }
         // Smooth A/B at the same output gain. Peak ceiling is a final safety clamp, not a mastering limiter.
         l=left+(l-left)*effect;r=right+(r-right)*effect;
         soundscape.next(l,r,p.ambience,effect);

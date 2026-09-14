@@ -12,6 +12,15 @@ All three source pages were checked on 2026-09-13 and identify the audio as **CC
 
 License: https://creativecommons.org/publicdomain/zero/1.0/
 
+## User-provided ambient drones
+
+The following bundled files were provided by the user. No license or ownership claim is made here beyond recording their provenance in the project:
+
+| File | Display name | Original filename |
+|---|---|---|
+| `user-deep-space-1.mp3` | 심우주1 | `sdanezis-low-frequency-cinematic-ambient-drone-1-557936.mp3` |
+| `user-deep-space-2.mp3` | 심우주2 | `sdanezis-low-frequency-cinematic-ambient-drone-2557943.mp3` |
+
 ## Original music and fictional radio
 
 - `radio-jazz.wav`: an obsolete original 32-bar, 68 BPM jazz-style instrumental from the prototype. It is not part of the current release, and no sampled commercial songs or broadcast audio are used.
@@ -38,6 +47,6 @@ Additional CC0 pages were checked directly on 2026-09-13; exact HQ preview URLs 
 
 Tokyo Office is a fictional atmosphere assembled from these recordings, not a claim that the stock layers were recorded in Tokyo.
 
-`twilight-piano.wav` and `memory-chimes.wav` are original synthesis created for this version by `scripts/make_twilight.py`, with sparse piano voicings, distant bell/wood impulses and reflections. They do not copy the reference videos' compositions. Both are 96-second scenes. The piano bank is used only by Twilight Lake.
+`twilight-piano.wav` and `memory-chimes.wav` are original synthesis created for this version by `scripts/make_twilight.py`; the generated chime scene is retained as an offline/reference asset and is not used by the current 종 소리 1 track. The current track uses the user-provided `hums-wind-chimes-183557.mp3` and contains no wood sound. The generated assets do not copy the reference videos' compositions. Both are 96-second scenes. The piano bank is used only by Twilight Lake.
 
 The four 0.3 Japanese scripts are fictional neighborhood/cultural broadcast passages, clearly labeled as generated fictional broadcasts in the app. No actual current events, named real broadcaster, source video speech, or commercial broadcast audio is used.

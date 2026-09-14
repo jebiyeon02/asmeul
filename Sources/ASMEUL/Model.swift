@@ -5,11 +5,31 @@ import CoreAudio
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct AudioProcess: Identifiable, Hashable {
-  let id: UInt32
-  let name: String
-  let bundleID: String
+struct EnvironmentPhoto: Identifiable, Hashable, Codable {
+  let id: String
+  let title: String
+  let subtitle: String
+  let fileName: String
+
+  static let library: [EnvironmentPhoto] = [
+    EnvironmentPhoto(
+      id: "earth-orbit", title: "지구 궤도", subtitle: "EARTH ORBIT",
+      fileName: "environment-earth-orbit.jpg"),
+    EnvironmentPhoto(
+      id: "earth-night", title: "지구의 밤", subtitle: "EARTH AT NIGHT",
+      fileName: "environment-earth-night.jpg"),
+    EnvironmentPhoto(
+      id: "snowy-cafe", title: "눈 내리는 카페", subtitle: "SNOWY CAFE",
+      fileName: "environment-snowy-cafe.jpg"),
+    EnvironmentPhoto(
+      id: "sunset-camp", title: "황혼의 캠프", subtitle: "SUNSET CAMP",
+      fileName: "environment-sunset-camp.jpg"),
+    EnvironmentPhoto(
+      id: "river-valley", title: "강가의 계곡", subtitle: "RIVER VALLEY",
+      fileName: "environment-river-valley.jpg"),
+  ]
 }
+
 struct SavedMood: Codable {
   var space, warmth, orbit, gain: Double
   var ambience: Double? = nil
@@ -17,6 +37,7 @@ struct SavedMood: Codable {
   var tracks: [TrackSetting]? = nil
   var spatial: Bool? = nil
   var theme: AmbientTheme? = nil
+  var environmentID: String? = nil
 }
 
 enum AmbientTheme: String, Codable, CaseIterable, Identifiable {
@@ -72,6 +93,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
 @MainActor final class AudioModel: ObservableObject {
   @Published var spatial = true { didSet { configure() } }
   @Published var running = false
+  @Published var waitingForMusic = false
   @Published var bypass = false { didSet { configure() } }
   @Published var space = 0.28 { didSet { configure() } }
   @Published var warmth = 0.2 { didSet { configure() } }
@@ -79,6 +101,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   @Published var gain = 0.7 { didSet { configure() } }
   @Published var ambience = 0.65 { didSet { configure() } }
   @Published var music = 1.0 { didSet { configure() } }
+  @Published var focusMode = false
+  @Published var environmentID = EnvironmentPhoto.library[0].id
   @Published var theme: AmbientTheme = .deepSea { didSet { rememberMood() } }
   @Published var animationsEnabled: Bool =
     UserDefaults.standard.object(forKey: "animations.enabled") as? Bool ?? true {
@@ -86,37 +110,55 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   }
   @Published var catalog = ASMRTrack.builtIn
   @Published var tracks = ASMRTrack.builtIn.map { TrackSetting(id: $0.id) } {
-    didSet { configure() }
+    didSet { configureTracks(previous: oldValue) }
   }
   @Published var durations: [Int: Double] = [:]
-  @Published var assetsReady = false
+  @Published var assetsReady = true
+  @Published private(set) var loadingTracks: Set<Int> = []
+  @Published private(set) var importingSound = false
   @Published var selected: UInt32 = 0
   @Published var processes: [AudioProcess] = []
-  @Published var peak: Float = 0
+  let meter = AudioMeter()
   @Published var outputName = "기본 출력 장치"
   @Published var status = "헤드폰을 쓰고, 좋아하는 음악을 재생하세요."
   @Published var error: String?
-  @Published var rate: Double = 0
-  @Published var callbackCount: UInt64 = 0
+  private var rate: Double = 0
   private let engine = hollow_create()!
   private var monitorTimer: Timer?
   private var lastCallbacks: UInt64 = 0
   private var stalled = 0
-  private var refreshTick = 0
+  private let soundLoader = SoundLoader()
+  private var soundTasks: [Int: Task<Void, Never>] = [:]
+  private var loadGenerations: [Int: UUID] = [:]
+  private var loadedTracks: Set<Int> = []
+  private var evictionTasks: [Int: DispatchWorkItem] = [:]
+  private var metadataTask: Task<Void, Never>?
+  private var importTask: Task<Void, Never>?
+  private var shuttingDown = false
+  private var pendingSourceRefresh: DispatchWorkItem?
+  private var hardwareListeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+  private var capturedProcessIDs: [UInt32] = []
+  private var captureWaitTicks = 0
   private var hotKey: EventHotKeyRef?
   private var hotKeyHandler: EventHandlerRef?
   private var observers: [NSObjectProtocol] = []
   private var memories: [String: SavedMood] = [:]
-  var selectedTrackCount: Int { tracks.filter(\.enabled).count }
+  private var pendingMoodSave: DispatchWorkItem?
+  private var restoringMood = false
+  var selectedTrackCount: Int { tracks.reduce(0) { $0 + ($1.enabled ? 1 : 0) } }
   var memoryKey: String { processes.first(where: { $0.id == selected })?.bundleID ?? "system" }
   var activeTrackIDs: Set<Int> { Set(tracks.filter(\.enabled).map(\.id)) }
+  var selectedEnvironment: EnvironmentPhoto {
+    EnvironmentPhoto.library.first(where: { $0.id == environmentID })
+      ?? EnvironmentPhoto.library[0]
+  }
   var rainActive: Bool { tracks.contains { ($0.id == 0 || $0.id == 1) && $0.enabled } }
   var fireActive: Bool { tracks.contains { ($0.id == 18 || $0.id == 19) && $0.enabled } }
 
   var savedMood: SavedMood {
     SavedMood(
       space: space, warmth: warmth, orbit: orbit, gain: gain, ambience: ambience, music: music,
-      tracks: tracks, spatial: spatial, theme: theme)
+      tracks: tracks, spatial: spatial, theme: theme, environmentID: environmentID)
   }
   func toggleTrack(_ id: Int) {
     guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
@@ -128,7 +170,14 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     tracks[index].volume = value
   }
   func clearTracks() {
-    for i in tracks.indices { tracks[i].enabled = false }
+    var updated = tracks
+    for i in updated.indices { updated[i].enabled = false }
+    tracks = updated
+    rememberMood()
+  }
+  func selectEnvironment(_ id: String) {
+    guard EnvironmentPhoto.library.contains(where: { $0.id == id }) else { return }
+    environmentID = id
     rememberMood()
   }
   init() {
@@ -139,29 +188,29 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     {
       memories = saved
     }
-    do {
-      durations = try SoundLibrary.loadResources(into: engine)
-      assetsReady = true
-    } catch { self.error = "배경음 파일을 읽지 못했습니다: \(error.localizedDescription)" }
-    for item in catalog where item.custom {
-      do {
-        durations[item.id] = try SoundLibrary.load(
-          url: customSoundsDirectory.appendingPathComponent(item.file), slot: item.id, into: engine)
-      } catch {
-        self.error = "사용자 음원 \(item.name)을 읽지 못했습니다. 다시 추가해 주세요."
-      }
+    let urls = Dictionary(uniqueKeysWithValues: catalog.compactMap { item in
+      soundURL(item).map { (item.id, $0) }
+    })
+    let loader = soundLoader
+    metadataTask = Task(priority: .utility) { [weak self] in
+      let values = await loader.metadata(urls)
+      guard !Task.isCancelled, let self, !self.shuttingDown else { return }
+      self.durations.merge(values) { current, _ in current }
     }
     refreshProcesses()
     restoreMood()
     updateOutput()
-    monitorTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
-    }
+    installHardwareListeners()
     let center = NSWorkspace.shared.notificationCenter
     observers.append(
       center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
         [weak self] _ in Task { @MainActor in self?.stop(message: "Mac이 잠자기에 들어가 효과를 껐습니다.") }
       })
+    for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+      observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        Task { @MainActor in self?.scheduleSourceRefresh() }
+      })
+    }
     // Carbon hot keys do not require Accessibility or input monitoring permission.
     let pointer = Unmanaged.passUnretained(self).toOpaque()
     var eventType = EventTypeSpec(
@@ -182,37 +231,157 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   func defaultDirection(_ id: Int) -> Int {
     [
       1, 2, 4, 1, 1, 2, 2, 3, 4, 3, 0, 6, 5, 4, 1, 2, 3, 3, 1, 2, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1, 2,
-      3,
-    ][min(31, max(0, id))]
+      3, 4, 5, 1,
+    ][min(34, max(0, id))]
   }
   func setPosition(_ id: Int, direction: Int? = nil, distance: Double? = nil) {
     guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
-    if let direction { tracks[index].direction = direction }
-    if let distance { tracks[index].distance = distance }
+    var updated = tracks[index]
+    if let direction { updated.direction = direction }
+    if let distance { updated.distance = distance }
+    tracks[index] = updated
     rememberMood()
   }
   func configure() {
+    guard !restoringMood else { return }
     let fade = 1.0
     hollow_configure(
       engine, Float(space * fade), Float(warmth * fade), Float(orbit * fade),
       Float(gain), bypass ? 1 : 0)
     hollow_spatial(engine, spatial ? 1 : 0)
     hollow_mix(engine, Float(ambience), Float(music), Float(fade))
-    for track in tracks {
+  }
+
+  private func configureTracks(previous: [TrackSetting] = []) {
+    guard !restoringMood else { return }
+    let old = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+    for track in tracks where old[track.id] != track {
       hollow_position(
         engine, Int32(track.id), Int32(track.direction ?? defaultDirection(track.id)),
         Float(track.distance ?? 0.3))
       hollow_track_gain(engine, Int32(track.id), track.enabled ? Float(track.volume) : 0)
+      if track.enabled { requestSound(track.id) }
+      else { releaseSoundLater(track.id) }
     }
   }
 
+  private func soundURL(_ item: ASMRTrack) -> URL? {
+    item.custom ? customSoundsDirectory.appendingPathComponent(item.file)
+      : try? SoundLibrary.resourceURL(for: item)
+  }
+
+  private func requestSound(_ id: Int) {
+    evictionTasks.removeValue(forKey: id)?.cancel()
+    guard !shuttingDown, !loadedTracks.contains(id), soundTasks[id] == nil,
+      let item = catalog.first(where: { $0.id == id }), let url = soundURL(item) else { return }
+    let generation = UUID()
+    loadGenerations[id] = generation
+    loadingTracks.insert(id)
+    let loader = soundLoader
+    soundTasks[id] = Task(priority: .utility) { [weak self] in
+      do {
+        let prepared = try await loader.prepare(url: url, slot: id)
+        guard !Task.isCancelled, let self, !self.shuttingDown,
+          self.loadGenerations[id] == generation else { return }
+        guard prepared.install(into: self.engine) else { throw CocoaError(.fileReadCorruptFile) }
+        self.loadedTracks.insert(id)
+        self.durations[id] = prepared.duration
+        self.finishLoading(id)
+      } catch {
+        guard !Task.isCancelled, let self, !self.shuttingDown,
+          self.loadGenerations[id] == generation else { return }
+        self.finishLoading(id)
+        self.error = "\(item.name)을 준비하지 못했습니다: \(error.localizedDescription)"
+        if let index = self.tracks.firstIndex(where: { $0.id == id }) {
+          self.tracks[index].enabled = false
+        }
+      }
+    }
+  }
+
+  private func finishLoading(_ id: Int) {
+    soundTasks.removeValue(forKey: id)
+    loadGenerations.removeValue(forKey: id)
+    loadingTracks.remove(id)
+  }
+
+  private func releaseSoundLater(_ id: Int) {
+    soundTasks.removeValue(forKey: id)?.cancel()
+    loadGenerations.removeValue(forKey: id)
+    loadingTracks.remove(id)
+    evictionTasks.removeValue(forKey: id)?.cancel()
+    guard loadedTracks.contains(id) else { return }
+    // Let the existing 40 ms gain smoother fade out before unpublishing PCM.
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, !self.shuttingDown,
+        !self.tracks.contains(where: { $0.id == id && $0.enabled }) else { return }
+      hollow_unload_sound(self.engine, Int32(id))
+      self.loadedTracks.remove(id)
+      self.evictionTasks.removeValue(forKey: id)
+    }
+    evictionTasks[id] = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + (running ? 0.75 : 0), execute: work)
+  }
+
+  private func startMonitor() {
+    monitorTimer?.invalidate()
+    monitorTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+      Task { @MainActor in self?.tick() }
+    }
+    monitorTimer?.tolerance = 0.05
+  }
+
+  private func installHardwareListeners() {
+    for selector in [kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyDefaultOutputDevice] {
+      var address = AudioObjectPropertyAddress(mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+      let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+        Task { @MainActor in self?.scheduleSourceRefresh() }
+      }
+      if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener) == noErr {
+        hardwareListeners.append((AudioObjectID(kAudioObjectSystemObject), address, listener))
+      }
+    }
+  }
+
+  private func scheduleSourceRefresh() {
+    guard !shuttingDown else { return }
+    // Coalesce the bursts generated by starting/stopping an aggregate device.
+    guard pendingSourceRefresh == nil else { return }
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, !self.shuttingDown else { return }
+      self.pendingSourceRefresh = nil
+      self.refreshProcesses()
+      self.updateOutput()
+      self.tick()
+    }
+    pendingSourceRefresh = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+  }
+
   func rememberMood() {
+    guard !restoringMood else { return }
     memories[memoryKey] = savedMood
+    pendingMoodSave?.cancel()
+    let work = DispatchWorkItem { [weak self] in self?.flushMoodSave() }
+    pendingMoodSave = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+  }
+
+  private func flushMoodSave() {
+    pendingMoodSave?.cancel()
+    pendingMoodSave = nil
     if let data = try? JSONEncoder().encode(memories) {
       UserDefaults.standard.set(data, forKey: "mixes.v4")
     }
   }
   func restoreMood() {
+    restoringMood = true
+    defer {
+      restoringMood = false
+      configure()
+      configureTracks()
+    }
     guard let value = memories[memoryKey] else {
       space = 0.28
       warmth = 0.2
@@ -221,11 +390,15 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       ambience = 0.65
       music = 1
       theme = .deepSea
+      environmentID = EnvironmentPhoto.library[0].id
       tracks = catalog.map { TrackSetting(id: $0.id) }
       return
     }
     spatial = value.spatial ?? true
     theme = value.theme ?? .deepSea
+    environmentID = EnvironmentPhoto.library.contains(where: { $0.id == value.environmentID })
+      ? (value.environmentID ?? EnvironmentPhoto.library[0].id)
+      : EnvironmentPhoto.library[0].id
     ambience = min(1, max(0, value.ambience ?? 0.65))
     music = min(1, max(0, value.music ?? 1))
     tracks = catalog.map { item in
@@ -240,23 +413,46 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     warmth = min(1, max(0, value.warmth))
     orbit = min(1, max(0, value.orbit))
     gain = min(1, max(0, value.gain))
-    configure()
   }
   func changeSource(_ id: UInt32) {
+    guard selected != id else { return }
+    let resume = running
     rememberMood()
     stop(message: "소스를 변경했습니다.")
     selected = id
-    restoreMood()
+    // A music input change must preserve the ASMR selection and mix volumes.
+    if music < 0.001 {
+      // Every source, including the whole system, explicitly enables music.
+      music = 1
+      status = "\(processes.first(where: { $0.id == id })?.name ?? "전체 시스템") 음악 입력을 켰습니다."
+    }
+    rememberMood()
+    if resume { start() }
   }
   func toggle() { if running { stop() } else { start() } }
+  func toggleFocusMode() { focusMode.toggle() }
   func start() {
     guard assetsReady else { return }
     error = nil
+    refreshProcesses()
+    guard selected == 0 || processes.contains(where: { $0.id == selected }) else {
+      error = "선택한 앱이 종료되었습니다. 다른 소스를 선택하세요."
+      return
+    }
     configure()
-    if hollow_start(engine, selected) == 0 {
+    configureTracks()
+    let ids = processes.first(where: { $0.id == selected })?.processIDs ?? []
+    let result = selected == 0 ? hollow_start(engine, 0) : ids.withUnsafeBufferPointer {
+      hollow_start_processes(engine, $0.baseAddress, UInt32($0.count))
+    }
+    if result == 0 {
+      capturedProcessIDs = ids
+      captureWaitTicks = 0
+      waitingForMusic = false
       running = true
+      startMonitor()
       rate = hollow_sample_rate(engine)
-      status = "선택한 ASMR을 함께 재생하고 있어요."
+      status = "음악 입력을 확인하고 있어요. 원음과 ASMR을 함께 재생합니다."
       lastCallbacks = 0
       stalled = 0
       updateOutput()
@@ -268,8 +464,12 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   }
   func stop(message: String = "효과를 껐습니다. 앱의 원래 소리로 재생됩니다.") {
     hollow_stop(engine)
+    monitorTimer?.invalidate()
+    monitorTimer = nil
     running = false
-    peak = 0
+    waitingForMusic = false
+    capturedProcessIDs = []
+    meter.reset()
     status = message
     rememberMood()
   }
@@ -279,7 +479,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       initial: UInt32(0)),
       let name = stringProperty(device, kAudioObjectPropertyName)
     {
-      outputName = name
+      if outputName != name { outputName = name }
     }
   }
   func sampleRateForOutput() -> Double? {
@@ -294,16 +494,33 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     else { return nil }
     return value
   }
-  func tick() {
-    refreshTick += 1
-    if refreshTick % 12 == 0 {
-      refreshProcesses()
-      updateOutput()
+  private func pollMusicInput() -> Bool {
+    let captureState = hollow_poll_capture(engine)
+    if captureState < 0 {
+      let detail = String(cString: hollow_error(engine))
+      stop(message: "음악 입력을 연결하지 못해 원음으로 복구했습니다.")
+      error = "오디오 연결 실패: \(detail)"
+      return false
     }
-    guard running else { return }
-    peak = max(hollow_peak(engine), peak * 0.85)
+    if captureState == 0 {
+      captureWaitTicks = min(20, captureWaitTicks + 1)
+      if captureWaitTicks == 20 && !waitingForMusic {
+        waitingForMusic = true
+        status = "음악 입력 대기 중 · 원음 유지"
+      }
+    } else if captureWaitTicks >= 0 {
+      captureWaitTicks = -1
+      waitingForMusic = false
+      status = "음악과 선택한 ASMR을 함께 재생하고 있어요."
+    }
+    return true
+  }
+  func tick() {
+    guard !shuttingDown, running else { return }
+    guard pollMusicInput() else { return }
+    hollow_collect_sounds(engine)
+    meter.update(peak: hollow_peak(engine))
     let callbacks = hollow_callbacks(engine)
-    callbackCount = callbacks
     if callbacks == lastCallbacks { stalled += 1 } else { stalled = 0 }
     lastCallbacks = callbacks
     if stalled > 40 {
@@ -328,6 +545,19 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       selected = 0
       return
     }
+    if selected != 0, let source = processes.first(where: { $0.id == selected }),
+      source.processIDs != capturedProcessIDs
+    {
+      let result = source.processIDs.withUnsafeBufferPointer {
+        hollow_update_processes(engine, $0.baseAddress, UInt32($0.count))
+      }
+      if result == 0 {
+        capturedProcessIDs = source.processIDs
+      } else {
+        stop(message: "앱의 오디오 연결이 바뀌어 다시 연결합니다.")
+        start()
+      }
+    }
   }
   func refreshProcesses() {
     var address = AudioObjectPropertyAddress(
@@ -343,18 +573,26 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       AudioObjectGetPropertyData(
         AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr
     else { return }
-    processes = ids.compactMap { id in
+    let records: [AudioProcessRecord] = ids.prefix(Int(size) / MemoryLayout<UInt32>.size).compactMap { id in
       guard let pid: Int32 = property(id, kAudioProcessPropertyPID, initial: Int32(0)),
-        pid != getpid(),
-        let bundle = stringProperty(id, kAudioProcessPropertyBundleID)
+        pid != getpid()
       else { return nil }
-      let app = NSRunningApplication(processIdentifier: pid)
-      let name =
-        app?.localizedName ?? (bundle as String).split(separator: ".").last.map(String.init)
-        ?? "Audio process"
-      return AudioProcess(
-        id: id, name: name, bundleID: (bundle as String).isEmpty ? "pid-\(pid)" : bundle as String)
-    }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+      return AudioProcessRecord(
+        id: id, pid: pid, bundleID: stringProperty(id, kAudioProcessPropertyBundleID),
+        bundlePath: NSRunningApplication(processIdentifier: pid)?.bundleURL?.standardizedFileURL.path)
+    }
+    let apps: [AudioApplication] = NSWorkspace.shared.runningApplications.compactMap { app in
+      guard app.processIdentifier != getpid(), app.activationPolicy == .regular,
+        let name = app.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !name.isEmpty
+      else { return nil }
+      return AudioApplication(
+        pid: app.processIdentifier, name: name,
+        bundleID: app.bundleIdentifier ?? "pid-\(app.processIdentifier)",
+        bundlePath: app.bundleURL?.standardizedFileURL.path)
+    }
+    let updated = groupedAudioSources(applications: apps, records: records, selected: selected)
+    if updated != processes { processes = updated }
   }
   func exportPreset() {
     let panel = NSSavePanel()
@@ -386,6 +624,8 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       guard levels.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
         savedTracks.count <= catalog.count,
         Set(savedTracks.map(\.id)).count == savedTracks.count,
+        value.environmentID == nil
+          || EnvironmentPhoto.library.contains(where: { $0.id == value.environmentID }),
         savedTracks.allSatisfy({ t in
           catalog.contains(where: { $0.id == t.id }) && t.volume.isFinite
             && (0...1).contains(t.volume)
@@ -415,6 +655,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     tracks.append(contentsOf: valid.map { TrackSetting(id: $0.id) })
   }
   func importSound() {
+    guard !importingSound else { return }
     guard let slot = (21..<32).first(where: { id in !catalog.contains(where: { $0.id == id }) })
     else {
       error = "사용자 음원은 최대 11개까지 추가할 수 있습니다."
@@ -425,29 +666,58 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     panel.allowsMultipleSelection = false
     panel.message = "아스믈에 추가할 MP3를 선택하세요. 최대 길이는 60분입니다."
     guard panel.runModal() == .OK, let source = panel.url else { return }
+    let destination = customSoundsDirectory.appendingPathComponent("custom-\(slot)-\(UUID().uuidString).mp3")
+    let rawName = source.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+    let loader = soundLoader
+    importingSound = true
+    status = "음원을 추가하고 있어요."
+    importTask = Task(priority: .utility) { [weak self] in
+      do {
+        let duration = try await loader.importRecording(from: source, to: destination, slot: slot)
+        guard !Task.isCancelled, let self, !self.shuttingDown else {
+          try? FileManager.default.removeItem(at: destination)
+          return
+        }
+        let item = ASMRTrack(id: slot,
+          name: rawName.isEmpty ? "사용자 음원 \(slot - 20)" : rawName,
+          file: destination.lastPathComponent, symbol: "waveform", supplied: true, custom: true)
+        // Persist before publishing so a failed save cannot leave a ghost card.
+        try JSONEncoder().encode(self.catalog.filter(\.custom) + [item])
+          .write(to: self.customCatalogURL, options: .atomic)
+        self.catalog.append(item)
+        self.tracks.append(TrackSetting(id: slot))
+        self.durations[slot] = duration
+        self.status = "\(item.name)을 추가했습니다."
+        self.error = nil
+        self.importingSound = false
+        self.importTask = nil
+      } catch {
+        try? FileManager.default.removeItem(at: destination)
+        guard !Task.isCancelled, let self, !self.shuttingDown else { return }
+        self.error = "MP3를 추가하지 못했습니다: \(error.localizedDescription)"
+        self.importingSound = false
+        self.importTask = nil
+      }
+    }
+  }
+
+  func renameCustomSound(_ id: Int, name: String) {
+    guard let index = catalog.firstIndex(where: { $0.id == id && $0.custom }) else { return }
+    let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty else {
+      error = "음원 이름을 입력해 주세요."
+      return
+    }
+    catalog[index].name = String(cleaned.prefix(80))
     do {
       try FileManager.default.createDirectory(
         at: customSoundsDirectory, withIntermediateDirectories: true)
-      let destination = customSoundsDirectory.appendingPathComponent("custom-\(slot).mp3")
-      if FileManager.default.fileExists(atPath: destination.path) {
-        try FileManager.default.removeItem(at: destination)
-      }
-      try FileManager.default.copyItem(at: source, to: destination)
-      let duration = try SoundLibrary.load(url: destination, slot: slot, into: engine)
-      let rawName = source.deletingPathExtension().lastPathComponent.trimmingCharacters(
-        in: .whitespacesAndNewlines)
-      let item = ASMRTrack(
-        id: slot, name: rawName.isEmpty ? "사용자 음원 \(slot - 20)" : rawName,
-        file: destination.lastPathComponent, symbol: "waveform", supplied: true, custom: true)
-      catalog.append(item)
-      tracks.append(TrackSetting(id: slot))
-      durations[slot] = duration
       let custom = catalog.filter(\.custom)
       try JSONEncoder().encode(custom).write(to: customCatalogURL, options: .atomic)
-      status = "\(item.name)을 추가했습니다."
+      status = "\(catalog[index].name)으로 이름을 변경했습니다."
       error = nil
-    } catch let importError {
-      self.error = "MP3를 추가하지 못했습니다: \(importError.localizedDescription)"
+    } catch {
+      self.error = "음원 이름을 저장하지 못했습니다: \(error.localizedDescription)"
     }
   }
   func removeCustomSound(_ id: Int) {
@@ -464,7 +734,13 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     }
 
     // Stop the slot immediately before removing its UI and persisted catalog entry.
+    soundTasks.removeValue(forKey: id)?.cancel()
+    loadGenerations.removeValue(forKey: id)
+    loadingTracks.remove(id)
+    evictionTasks.removeValue(forKey: id)?.cancel()
+    loadedTracks.remove(id)
     hollow_track_gain(engine, Int32(id), 0)
+    hollow_unload_sound(engine, Int32(id))
     catalog.remove(at: index)
     tracks.removeAll { $0.id == id }
     durations.removeValue(forKey: id)
@@ -482,7 +758,21 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     rememberMood()
   }
   func shutdown() {
+    guard !shuttingDown else { return }
+    shuttingDown = true
+    metadataTask?.cancel()
+    importTask?.cancel()
+    soundTasks.values.forEach { $0.cancel() }
+    soundTasks.removeAll()
+    evictionTasks.values.forEach { $0.cancel() }
+    evictionTasks.removeAll()
+    pendingSourceRefresh?.cancel()
+    for (object, var address, listener) in hardwareListeners {
+      AudioObjectRemovePropertyListenerBlock(object, &address, .main, listener)
+    }
+    hardwareListeners.removeAll()
     stop()
+    flushMoodSave()
     monitorTimer?.invalidate()
     if let hotKey { UnregisterEventHotKey(hotKey) }
     if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }

@@ -1,0 +1,42 @@
+import Foundation
+
+struct AudioProcess: Identifiable, Hashable {
+  // Application PID stays stable when an audio helper restarts.
+  let id: UInt32
+  let name: String
+  let bundleID: String
+  let processIDs: [UInt32]
+}
+
+struct AudioProcessRecord {
+  let id: UInt32
+  let pid: Int32
+  let bundleID: String?
+  let bundlePath: String?
+}
+
+struct AudioApplication {
+  let pid: Int32
+  let name: String
+  let bundleID: String
+  let bundlePath: String?
+
+  func owns(_ process: AudioProcessRecord) -> Bool {
+    if process.pid == pid || process.bundleID == bundleID { return true }
+    // Chromium/Electron audio lives in nested Helper.app bundles. Do not
+    // capture unrelated apps with similar bundle IDs or shared system daemons.
+    guard let root = bundlePath, let path = process.bundlePath else { return false }
+    return path == root || path.hasPrefix(root + "/")
+  }
+}
+
+func groupedAudioSources(
+  applications: [AudioApplication], records: [AudioProcessRecord], selected: UInt32
+) -> [AudioProcess] {
+  applications.compactMap { app in
+    let ids = Array(Set(records.filter { app.owns($0) }.map(\.id))).sorted()
+    guard !ids.isEmpty || UInt32(app.pid) == selected else { return nil }
+    return AudioProcess(
+      id: UInt32(app.pid), name: app.name, bundleID: app.bundleID, processIDs: ids)
+  }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}

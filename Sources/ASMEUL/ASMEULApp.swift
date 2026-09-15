@@ -355,7 +355,9 @@ struct Sidebar: View {
       HStack {
         Label("입체음향", systemImage: "headphones").font(.system(size: 11, weight: .medium))
         Spacer()
-        Toggle("", isOn: $model.spatial).labelsHidden().toggleStyle(.switch).controlSize(.small)
+        Toggle("", isOn: $model.spatial).labelsHidden()
+          .toggleStyle(MixerSwitchStyle(showsLabel: false)).controlSize(.small)
+          .accessibilityLabel("입체음향")
           .tint(accent).onChange(of: model.spatial) { model.rememberMood() }
       }
       Divider().overlay(hairline).padding(.vertical, 23)
@@ -389,7 +391,7 @@ struct Sidebar: View {
             Image(systemName: "chevron.up.chevron.down").font(.system(size: 7, weight: .bold))
           }.foregroundStyle(Color.white.opacity(0.82))
         }
-        .menuStyle(.borderlessButton)
+        .mixerMenuStyle()
         .accessibilityLabel("배경 무드")
       }
       Divider().overlay(hairline).padding(.vertical, 18)
@@ -402,10 +404,29 @@ struct Sidebar: View {
       Divider().overlay(hairline).padding(.bottom, 22)
       Text("AUDIO SOURCE").font(.system(size: 8, weight: .medium)).tracking(1.7)
         .foregroundStyle(muted).padding(.bottom, 9)
-      Picker("소스", selection: Binding(get: { model.selected }, set: { model.changeSource($0) })) {
-        Text("전체 시스템").tag(UInt32(0))
-        ForEach(model.processes) { Text($0.name).tag($0.id) }
-      }.labelsHidden().controlSize(.small)
+      Menu {
+        Picker("소스", selection: Binding(get: { model.selected }, set: { model.changeSource($0) })) {
+          Text("전체 시스템").tag(UInt32(0))
+          ForEach(model.processes) { Text($0.name).tag($0.id) }
+        }
+        .pickerStyle(.inline)
+      } label: {
+        HStack(spacing: 6) {
+          Text(model.processes.first(where: { $0.id == model.selected })?.name ?? "전체 시스템")
+            .lineLimit(1)
+          Spacer(minLength: 0)
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 7, weight: .bold))
+        }
+        .font(.system(size: 10))
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(hairline, lineWidth: 0.7))
+      }
+      .mixerMenuStyle()
+      .accessibilityLabel("소스")
+      .accessibilityValue(model.processes.first(where: { $0.id == model.selected })?.name ?? "전체 시스템")
       if model.waitingForMusic {
         Text("음악 입력 대기 중 · 원음 유지")
           .font(.system(size: 9)).foregroundStyle(.orange)
@@ -445,7 +466,7 @@ struct CompactSlider: View {
         Text("\(Int(value * 100))").font(.system(size: 9, weight: .medium, design: .monospaced))
           .foregroundStyle(accent)
       }
-      Slider(value: $value, in: 0...1).tint(accent).accessibilityLabel(title)
+      MixerSlider(value: $value, in: 0...1).tint(accent).accessibilityLabel(title)
     }.padding(.bottom, 20)
   }
 }
@@ -491,7 +512,7 @@ struct TrackCard: View {
       .accessibilityLabel(track.name)
       .accessibilityValue(setting.enabled ? "선택됨" : "선택 안 됨")
       HStack(spacing: 9) {
-        Slider(
+        MixerSlider(
           value: Binding(get: { setting.volume }, set: { model.setTrackVolume(track.id, $0) }),
           in: 0...1
         ).tint(accent).accessibilityLabel("\(track.name) 음량")
@@ -509,10 +530,10 @@ struct TrackCard: View {
               directions[setting.direction ?? model.defaultDirection(track.id)],
               systemImage: "location.fill"
             ).font(.system(size: 8, weight: .medium)).foregroundStyle(muted)
-          }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("\(track.name) 위치")
+          }.mixerMenuStyle().fixedSize().accessibilityLabel("\(track.name) 위치")
           Spacer()
           Image(systemName: "dot.circle").font(.system(size: 8)).foregroundStyle(muted)
-          Slider(
+          MixerSlider(
             value: Binding(
               get: { setting.distance ?? 0.3 }, set: { model.setPosition(track.id, distance: $0) }),
             in: 0...1
@@ -591,7 +612,7 @@ struct BottomBar: View {
       Toggle(
         "ASMR만", isOn: Binding(get: { model.music < 0.001 }, set: { model.music = $0 ? 0 : 1 })
       )
-      .toggleStyle(.switch)
+      .toggleStyle(MixerSwitchStyle())
       .controlSize(.mini)
       .tint(accent)
       .font(.system(size: 9))
@@ -601,7 +622,7 @@ struct BottomBar: View {
 
       HStack(spacing: 8) {
         Image(systemName: "speaker.wave.2").foregroundStyle(muted)
-        Slider(value: $model.gain, in: 0...1).frame(width: 94).tint(accent)
+        MixerSlider(value: $model.gain, in: 0...1).frame(width: 94).tint(accent)
           .accessibilityLabel("출력 볼륨")
         Text("\(Int(model.gain * 100))%")
           .font(.system(size: 8, design: .monospaced))
@@ -618,7 +639,7 @@ struct BottomBar: View {
       } label: {
         Image(systemName: "ellipsis")
       }
-      .menuStyle(.borderlessButton)
+      .mixerMenuStyle()
       .frame(width: 24)
       .accessibilityLabel("더 보기")
 
@@ -645,15 +666,17 @@ struct AmbientFog: View {
 
   var body: some View {
     ZStack {
-      // Keep broad lights at 60 Hz; faster particles can use high-refresh displays.
+      // The mixer shares its frame budget with the controls and background lights.
       MotionTimeline(isRunning: animationsEnabled && isPlaying, framesPerSecond: 60) { time in
         AmbientFogFrame(
           time: animationsEnabled ? time : 0, theme: theme,
           activeTrackIDs: activeTrackIDs)
       }
       if animationsEnabled {
-        MotionTimeline(isRunning: isPlaying, framesPerSecond: 120) { time in
-          AmbientParticles(time: time, theme: theme, activeTrackIDs: activeTrackIDs)
+        MotionTimeline(isRunning: isPlaying, framesPerSecond: 60) { time in
+          AmbientParticles(
+            time: time, theme: theme, activeTrackIDs: activeTrackIDs,
+            usesReducedResolution: true)
         }
       }
     }
@@ -671,7 +694,13 @@ private struct AmbientFogFrame: View {
     GeometryReader { proxy in
       ZStack {
         ink
+        // The mesh has no fine detail. Rasterize at quarter dimensions before
+        // scaling, so its 60 Hz updates do not shade a full Retina-sized surface.
         mesh
+          .frame(width: proxy.size.width / 4, height: proxy.size.height / 4)
+          .drawingGroup(opaque: true, colorMode: .nonLinear)
+          .scaleEffect(4)
+          .frame(width: proxy.size.width, height: proxy.size.height)
         fogLight(
           color: primaryLight, opacity: 0.2, size: 560, blur: 150,
           x: -proxy.size.width * 0.28 + sin(time * 0.18) * 160,
@@ -813,18 +842,11 @@ private struct AmbientFogFrame: View {
   ) -> some View {
     let breathing = 0.7 + 0.3 * (0.5 + 0.5 * sin(time * pulse))
     let scale = 0.9 + 0.1 * (0.5 + 0.5 * cos(time * pulse * 0.73))
-    let gradient = RadialGradient(
-      stops: [
-        .init(color: color.opacity(opacity * breathing), location: 0),
-        .init(color: color.opacity(opacity * breathing * 0.42), location: 0.34),
-        .init(color: color.opacity(opacity * 0.08), location: 0.7),
-        .init(color: .clear, location: 1),
-      ],
-      center: .center,
-      startRadius: 0,
-      endRadius: size * 0.5)
-    return Circle().fill(gradient).frame(width: size, height: size)
-      .scaleEffect(scale).blur(radius: blur * 0.32).offset(x: x, y: y)
+    return CachedFogLight(
+      style: .init(color: color, opacity: opacity, size: size, blur: blur * 0.32),
+      breathing: breathing, scale: scale
+    )
+    .offset(x: x, y: y)
   }
 
   private var rainActive: Bool {
@@ -865,10 +887,36 @@ private struct AmbientParticles: View {
   let time: TimeInterval
   let theme: AmbientTheme
   let activeTrackIDs: Set<Int>
+  var usesReducedResolution = false
+  @Environment(\.displayScale) private var displayScale
 
+  @ViewBuilder
   var body: some View {
+    if usesReducedResolution {
+      GeometryReader { proxy in
+        // Keep motion coordinates in points, but bound the mixer's particle
+        // texture to one pixel per point instead of the full Retina resolution.
+        let scale = 1 / max(1, displayScale)
+        particleCanvas(logicalSize: proxy.size, renderScale: scale)
+          .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
+          .drawingGroup(opaque: false, colorMode: .nonLinear)
+          .scaleEffect(1 / scale, anchor: .topLeading)
+          .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+      }
+      .blendMode(.screen)
+      .opacity(0.9)
+    } else {
+      particleCanvas()
+        .blendMode(.screen)
+        .opacity(0.9)
+    }
+  }
+
+  private func particleCanvas(logicalSize: CGSize? = nil, renderScale: CGFloat = 1) -> some View {
     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) {
-      context, size in
+      context, canvasSize in
+      let size = logicalSize ?? canvasSize
+      context.scaleBy(x: renderScale, y: renderScale)
       let t = time
       if rainActive { drawRain(&context, size: size, time: t) }
       if snowActive { drawSnow(&context, size: size, time: t) }
@@ -886,8 +934,6 @@ private struct AmbientParticles: View {
       if fireActive { drawFire(&context, size: size, time: t) }
       if customActive || activeTrackIDs.isEmpty { drawDust(&context, size: size, time: t) }
     }
-    .blendMode(.screen)
-    .opacity(0.9)
   }
 
   private func drawRain(_ context: inout GraphicsContext, size: CGSize, time: Double) {
@@ -1135,11 +1181,13 @@ private struct AmbientParticles: View {
       let width = 8 + fraction(seed * 0.43) * 9
       let height = width * (0.48 + fraction(seed * 0.27) * 0.18)
       let angle = time * (0.55 + fraction(seed * 0.37) * 0.8) + seed * 2.2
+      let cosine = cos(angle)
+      let sine = sin(angle)
 
       func point(_ x: Double, _ y: Double) -> CGPoint {
         CGPoint(
-          x: center.x + x * cos(angle) - y * sin(angle),
-          y: center.y + x * sin(angle) + y * cos(angle))
+          x: center.x + x * cosine - y * sine,
+          y: center.y + x * sine + y * cosine)
       }
 
       var leaf = Path()
@@ -1247,7 +1295,7 @@ struct EnvironmentMenu: View {
         compact ? Color.black.opacity(0.18) : Color.clear,
         in: Capsule())
     }
-    .menuStyle(.borderlessButton)
+    .mixerMenuStyle()
     .accessibilityLabel("몰입 환경")
   }
 }
@@ -1634,37 +1682,39 @@ private struct FocusDockDetails: View {
 extension View {
   func glass(cornerRadius: CGFloat, active: Bool = false) -> some View {
     modifier(AppleGlassSurface(cornerRadius: cornerRadius, active: active))
-      .shadow(
-        color: active ? Color.indigo.opacity(0.14) : Color.black.opacity(0.22), radius: 11, y: 5)
   }
 }
 
 struct AppleGlassSurface: ViewModifier {
   let cornerRadius: CGFloat
   let active: Bool
-  @ViewBuilder func body(content: Content) -> some View {
-    if #available(macOS 26.0, *) {
-      content.glassEffect(
-        .clear.tint(active ? Color.indigo.opacity(0.1) : Color.white.opacity(0.02)),
-        in: .rect(cornerRadius: cornerRadius)
-      )
-      .background(
-        Color.black.opacity(active ? 0.26 : 0.2),
-        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-      )
-    } else {
-      content
-        .background(
-          .ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
-        .background(
-          active ? Color.indigo.opacity(0.07) : Color.white.opacity(0.018),
-          in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
-        .overlay(
-          RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .stroke(hairline, lineWidth: 0.7))
-    }
+  func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    content
+      .background {
+        // Shadow only the static surface. Pulsing symbols, native controls and
+        // meter updates must not become inputs to a blurred shadow of the whole card.
+        shape
+          .fill(
+            LinearGradient(
+              colors: [
+                Color.white.opacity(active ? 0.075 : 0.045),
+                Color.indigo.opacity(active ? 0.11 : 0.025),
+                Color.black.opacity(active ? 0.32 : 0.27),
+              ],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            )
+          )
+          .shadow(
+            color: active ? Color.indigo.opacity(0.14) : Color.black.opacity(0.22),
+            radius: 11, y: 5)
+      }
+      .overlay(
+        shape.stroke(
+          active ? Color.indigo.opacity(0.3) : Color.white.opacity(0.1),
+          lineWidth: active ? 0.9 : 0.7
+        ))
   }
 }
 

@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 private let sourceLogger = Logger(
   subsystem: Bundle.main.bundleIdentifier ?? "studio.asmeul", category: "AudioSource")
 
+private let starterTrackIDs: Set<Int> = [0, 2, 3]
+
 struct EnvironmentPhoto: Identifiable, Hashable, Codable {
   let id: String
   let title: String
@@ -152,6 +154,7 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
   private var memories: [String: SavedMood] = [:]
   private var pendingMoodSave: DispatchWorkItem?
   private var restoringMood = false
+  private var shouldInstallStarterMix = false
   var playbackActive: Bool { running || waitingForMusic }
   var selectedTrackCount: Int { tracks.reduce(0) { $0 + ($1.enabled ? 1 : 0) } }
   var memoryKey: String { processes.first(where: { $0.id == selected })?.bundleID ?? "system" }
@@ -193,8 +196,11 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
     animationsEnabled =
       UserDefaults.standard.object(forKey: "animations.enabled") as? Bool ?? true
     loadCustomCatalog()
-    if let data =
-      (UserDefaults.standard.data(forKey: "mixes.v4") ?? UserDefaults.standard.data(forKey: "moods")),
+    let storedMixData =
+      UserDefaults.standard.data(forKey: "mixes.v4")
+      ?? UserDefaults.standard.data(forKey: "moods")
+    shouldInstallStarterMix = storedMixData == nil
+    if let data = storedMixData,
       let saved = try? JSONDecoder().decode([String: SavedMood].self, from: data)
     {
       memories = saved
@@ -406,7 +412,14 @@ func stringProperty(_ object: AudioObjectID, _ selector: AudioObjectPropertySele
       music = 1
       theme = .deepSea
       environmentID = EnvironmentPhoto.library[0].id
-      tracks = catalog.map { TrackSetting(id: $0.id) }
+      tracks = catalog.map {
+        TrackSetting(id: $0.id, enabled: shouldInstallStarterMix && starterTrackIDs.contains($0.id))
+      }
+      if shouldInstallStarterMix {
+        shouldInstallStarterMix = false
+        memories[memoryKey] = savedMood
+        flushMoodSave()
+      }
       return
     }
     spatial = value.spatial ?? true
